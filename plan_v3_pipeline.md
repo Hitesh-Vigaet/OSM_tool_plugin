@@ -268,11 +268,16 @@ Both kinds, explicitly — they answer different questions:
 Each edge carries type, endpoints, and derivation confidence. Spatial edges record the tolerance used
 so results are reproducible and reviewable.
 
-> **Open decision (needs your input):** how much spatial inference to compute up front. `FrontsOnto`
-> and `Block` are the expensive ones (nearest-neighbour + polygon enclosure), and they're the ones
-> that make "buildings face the street" and "group buildings per block" possible later. Options:
-> compute always / compute on demand / make it a toggle. My recommendation: compute `FrontsOnto`
-> always (cheap with a grid index, high value), make `Block` extraction opt-in.
+> **Decided:** `FrontsOnto` is computed **always** — it is cheap with a uniform grid index and high
+> value (building orientation, setback, street-side asset choice all depend on it). `Block`
+> extraction is **opt-in**, since polygon enclosure over the road graph is the expensive derivation
+> and is only needed once per-block grouping is actually in use.
+>
+> Implementation notes for 2.4: build a uniform grid over road segments sized to the mean segment
+> length; for each building, query the 3×3 neighbouring cells and keep the nearest segment within a
+> distance cutoff (default 50 m). Record the distance and cutoff on the edge so the result is
+> reviewable, and flag buildings with no street within the cutoff rather than silently leaving them
+> unlinked.
 
 ### 2.4 Grouping
 
@@ -499,8 +504,7 @@ XS < 1h · S ≈ half day · M ≈ 1–2 days · L ≈ 3–5 days
 
 ## Open questions
 
-1. **Spatial inference depth** (§2.3) — always / on-demand / toggle. Recommendation: `FrontsOnto`
-   always, `Block` opt-in.
+1. ~~**Spatial inference depth** (§2.3)~~ — **decided**: `FrontsOnto` always, `Block` opt-in.
 2. **Graph asset size** — at 25 km² a graph could hold ~100k nodes. If `.uasset` serialization gets
    unwieldy we may need a binary side-car. Worth measuring at Phase 2.1 rather than guessing.
 3. **Terrain representation** — one `TerrainTile` node, or a tiled grid? Depends on whether terrain

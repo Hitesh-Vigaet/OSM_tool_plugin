@@ -28,7 +28,6 @@ public class OSMWorldGenEditor : ModuleRules
             "ToolMenus",
             "Projects",
             "EditorStyle",
-            "OSMWorldGenGenerators",
             "HTTP",
             "Json",
             "DeveloperSettings",

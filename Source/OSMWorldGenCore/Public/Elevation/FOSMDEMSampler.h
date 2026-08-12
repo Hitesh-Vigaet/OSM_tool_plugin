@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Terrain/FOSMGeoTIFFTile.h"
+#include "Elevation/FOSMGeoTIFFTile.h"
 
 /**
  * Samples elevation values from a loaded DEM raster using bilinear interpolation.
@@ -15,7 +15,7 @@
  *       double Elevation = Sampler.SampleElevation(51.5007, -0.1246);
  *   }
  */
-class OSMWORLDGENGENERATORS_API FOSMDEMSampler
+class OSMWORLDGENCORE_API FOSMDEMSampler
 {
 public:
     /**

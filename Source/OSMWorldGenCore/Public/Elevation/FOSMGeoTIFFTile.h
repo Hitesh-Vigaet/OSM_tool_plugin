@@ -8,7 +8,7 @@
  * Metadata extracted from a GeoTIFF tile header.
  * Captures everything needed to geo-reference the raster.
  */
-struct OSMWORLDGENGENERATORS_API FOSMGeoTIFFTile
+struct OSMWORLDGENCORE_API FOSMGeoTIFFTile
 {
     /** Raster width in pixels */
     int32 Width = 0;

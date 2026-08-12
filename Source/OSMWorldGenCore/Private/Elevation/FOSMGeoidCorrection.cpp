@@ -1,6 +1,6 @@
 // Copyright InviMind. All Rights Reserved.
 
-#include "Terrain/FOSMGeoidCorrection.h"
+#include "Elevation/FOSMGeoidCorrection.h"
 
 double FOSMGeoidCorrection::GetGeoidSeparation(double Latitude, double Longitude)
 {

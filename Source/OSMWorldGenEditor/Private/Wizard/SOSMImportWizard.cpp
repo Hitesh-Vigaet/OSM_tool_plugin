@@ -17,17 +17,14 @@
 #include "Framework/Docking/TabManager.h"
 #include "Editor.h"
 
-// Core & Generator headers
+// Core headers. No generator includes — the 3D generation layer was removed in
+// plan_v3_pipeline.md Phase 0; this wizard's responsibility now ends at a validated import.
 #include "Parsing/FOSMParser.h"
 #include "Parsing/FOSMParseResult.h"
 #include "Classification/FOSMTagClassifier.h"
 #include "CRS/FOSMCRSTransformer.h"
-#include "Generators/FOSMGenerationContext.h"
-#include "Terrain/UOSMTerrainGenerator.h"
-#include "Roads/UOSMRoadGenerator.h"
-#include "Buildings/UOSMBuildingGenerator.h"
-#include "Areas/UOSMAreaFeatureGenerator.h"
-#include "Scene/FOSMSceneSetup.h"
+#include "Elevation/FOSMDEMSampler.h"
+#include "Elevation/FOSMGeoTIFFTile.h"
 #include "Fetch/FOSMRegionCache.h"
 #include "Fetch/FOSMOverpassClient.h"
 #include "Fetch/FOSMOpenTopographyClient.h"
@@ -58,9 +55,9 @@ void SOSMImportWizard::Construct(const FArguments& InArgs)
                     {
                         case 0: return FText::FromString(TEXT("Step 1: Select Map (.osm/.pbf) & Elevation (.tif) Files"));
                         case 1: return FText::FromString(TEXT("Step 2: Georeferencing & Coordinate Reference System"));
-                        case 2: return FText::FromString(TEXT("Step 3: Layer Selection & Generator Options"));
-                        case 3: return FText::FromString(TEXT("Step 4: Executing 3D World Generation..."));
-                        case 4: return FText::FromString(TEXT("Step 5: Generation Complete!"));
+                        case 2: return FText::FromString(TEXT("Step 3: Feature Categories"));
+                        case 3: return FText::FromString(TEXT("Step 4: Importing & Validating..."));
+                        case 4: return FText::FromString(TEXT("Step 5: Import Complete"));
                         default: return FText::GetEmpty();
                     }
                 })
@@ -125,7 +122,7 @@ void SOSMImportWizard::Construct(const FArguments& InArgs)
                     SNew(SButton)
                     .Text_Lambda([this]()
                     {
-                        if (CurrentStepIndex == 2) return FText::FromString(TEXT("Start 3D Generation"));
+                        if (CurrentStepIndex == 2) return FText::FromString(TEXT("Run Import"));
                         if (CurrentStepIndex == 4) return FText::FromString(TEXT("Close Wizard"));
                         return FText::FromString(TEXT("Next"));
                     })
@@ -534,9 +531,11 @@ TSharedPtr<SWidget> SOSMImportWizard::ConstructStep4_Summary()
             SNew(STextBlock)
             .Text_Lambda([this]()
             {
-                return FText::FromString(FString::Printf(TEXT("3D World Generation Successful!\n\nGeoreferenced Origin: (Lat: %.6f, Lon: %.6f)\nSpawned Level Actors: %d\n\nAll generated actors carry queryable UOSMMetadataComponent data."),
-                    State.GeoOrigin.Latitude, State.GeoOrigin.Longitude, State.GeneratedActorCount));
+                return FText::FromString(State.ImportSummary.IsEmpty()
+                    ? TEXT("No import has been run yet.")
+                    : State.ImportSummary);
             })
+            .AutoWrapText(true)
         ];
 }
 
@@ -969,9 +968,6 @@ FReply SOSMImportWizard::OnStartGeneration()
     State.ProgressPercent = 0.1f;
 
     const FString OSMPath = State.OSMFilePath;
-    const bool bGenTerrain = State.bGenerateTerrain;
-    const bool bGenRoads = State.bGenerateRoads;
-    const bool bGenBuildings = State.bGenerateBuildings;
 
     // Resolve the region to generate at this single point of use, rather than trusting
     // State.MinLat/MaxLat/GeoOrigin as-is: those fields do double duty as a manual-file-scan
@@ -1050,77 +1046,76 @@ FReply SOSMImportWizard::OnStartGeneration()
     UE_LOG(LogTemp, Log, TEXT("OSM generation: %d features after clipping | extent ~%.2f x %.2f km"),
         FeatureTable.Num(), ExtentKm.X, ExtentKm.Y);
 
-    State.StatusText = FText::FromString(TEXT("Spawning 3D Actors in Unreal World..."));
+    State.StatusText = FText::FromString(TEXT("Summarising imported features..."));
     State.ProgressPercent = 0.8f;
 
-    UWorld* TargetWorld = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-    if (TargetWorld)
+    // ---- No 3D generation happens here any more (plan_v3_pipeline.md Phase 0) ----
+    //
+    // Everything that spawned actors — terrain Landscape, road meshes, building extrusion,
+    // area polygons, sky/lighting — has been removed. It produced geometry scattered across
+    // several Z-levels because there was no inspectable stage between "file on disk" and
+    // "actors in the world": defects were only ever discoverable as broken geometry, after
+    // the most expensive step had already run.
+    //
+    // The replacement is the City Graph (Phase 2) plus the Control Center UI (Phase 3), which
+    // make the interpretation of the data reviewable BEFORE anything is built. Until those
+    // land, this step's job is to prove the import is sound and report exactly what was
+    // understood from the files.
+
+    // Prove the DEM is readable and georeferenced consistently with the OSM data, rather than
+    // discovering at generation time that it silently fell back to flat ground.
+    FString ElevationSummary = TEXT("no DEM supplied (flat ground)");
+    if (!State.DEMFilePath.IsEmpty())
     {
-        FOSMSceneSetup::EnsureBasicSceneSetup(TargetWorld);
-
-        UOSMCRSTransformer* Transformer = NewObject<UOSMCRSTransformer>();
-        Transformer->Initialize(Origin, EOSMProjectionMode::ENU);
-
-        FOSMGenerationContext Context;
-        Context.CRSTransformer = Transformer;
-        Context.TargetWorld = TargetWorld;
-        Context.FeatureTable = &FeatureTable;
-
-        // Shared ground-elevation source: terrain, roads and buildings must all snap to the
-        // same surface or they end up separated by the region's absolute elevation.
-        Context.DEMFilePath = State.DEMFilePath;
-
-        // Size terrain to the region that was asked for, not to whatever the file contained.
-        if (bHaveRegion)
+        FOSMDEMSampler Sampler;
+        if (Sampler.Load(State.DEMFilePath))
         {
-            Context.SetTargetBounds(RegionMinLat, RegionMinLon, RegionMaxLat, RegionMaxLon);
+            const FOSMGeoTIFFTile& Tile = Sampler.GetTileMetadata();
+            const bool bCoversRegion = !bHaveRegion ||
+                (Tile.GetMinLat() <= RegionMinLat && Tile.GetMaxLat() >= RegionMaxLat &&
+                 Tile.GetMinLon() <= RegionMinLon && Tile.GetMaxLon() >= RegionMaxLon);
+
+            ElevationSummary = FString::Printf(
+                TEXT("%d x %d px, elevation %.1f-%.1f m, bounds lat[%.5f..%.5f] lon[%.5f..%.5f]%s"),
+                Tile.Width, Tile.Height, Tile.MinElevation, Tile.MaxElevation,
+                Tile.GetMinLat(), Tile.GetMaxLat(), Tile.GetMinLon(), Tile.GetMaxLon(),
+                bCoversRegion ? TEXT("") : TEXT("  [WARNING: does not fully cover the requested region]"));
         }
-
-        TArray<AActor*> SpawnedActors;
-
-        if (bGenTerrain)
+        else
         {
-            UOSMTerrainGenerator* TerrainGen = NewObject<UOSMTerrainGenerator>();
-
-            // Hand the fetched/selected DEM to the generator. Without this the generator's
-            // own TerrainSettings.DEMFilePath stays empty and it silently takes its
-            // "No DEM specified -> flat terrain" path, so a perfectly good .tif sitting on
-            // disk is downloaded, cached, and then ignored.
-            TerrainGen->TerrainSettings.DEMFilePath = State.DEMFilePath;
-
-            UE_LOG(LogTemp, Log, TEXT("OSM generation: DEM file='%s'"),
-                State.DEMFilePath.IsEmpty() ? TEXT("<none - flat terrain>") : *State.DEMFilePath);
-
-            TArray<const FOSMFeature*> TerrainFeatures = FeatureTable.GetFeaturesByType(EOSMFeatureType::Landuse);
-            TerrainGen->Generate(Context, TerrainFeatures, SpawnedActors);
+            ElevationSummary = FString::Printf(TEXT("FAILED to load '%s'"), *State.DEMFilePath);
         }
-
-        if (bGenRoads)
-        {
-            UOSMRoadGenerator* RoadGen = NewObject<UOSMRoadGenerator>();
-            TArray<const FOSMFeature*> RoadFeatures = FeatureTable.GetFeaturesByType(EOSMFeatureType::Highway);
-            RoadGen->Generate(Context, RoadFeatures, SpawnedActors);
-        }
-
-        if (bGenBuildings)
-        {
-            UOSMBuildingGenerator* BuildingGen = NewObject<UOSMBuildingGenerator>();
-            TArray<const FOSMFeature*> BuildingFeatures = FeatureTable.GetFeaturesByType(EOSMFeatureType::Building);
-            BuildingGen->Generate(Context, BuildingFeatures, SpawnedActors);
-        }
-
-        // Water, vegetation, land use, parks, railways, barriers, power. These were already
-        // parsed and classified but no generator consumed them, so they never reached the
-        // scene — which is why only buildings and roads were ever visible.
-        {
-            UOSMAreaFeatureGenerator* AreaGen = NewObject<UOSMAreaFeatureGenerator>();
-            AreaGen->Generate(Context, SpawnedActors);
-        }
-
-        State.GeneratedActorCount = SpawnedActors.Num();
     }
 
-    State.StatusText = FText::FromString(TEXT("Generation Complete!"));
+    // Per-category breakdown: the first honest answer to "what is actually in my data?".
+    FString Breakdown;
+    for (uint8 TypeIdx = 0; TypeIdx < static_cast<uint8>(EOSMFeatureType::MAX); ++TypeIdx)
+    {
+        const EOSMFeatureType Type = static_cast<EOSMFeatureType>(TypeIdx);
+        const int32 Count = FeatureTable.GetCountByType(Type);
+        if (Count > 0)
+        {
+            Breakdown += FString::Printf(TEXT("  %-14s %d\n"), *OSMFeatureTypeToString(Type), Count);
+        }
+    }
+
+    UE_LOG(LogTemp, Log, TEXT("OSM import summary:\n  Region      lat[%.6f..%.6f] lon[%.6f..%.6f]\n")
+        TEXT("  Extent      %.2f x %.2f km\n  Features    %d\n%s  Elevation   %s"),
+        RegionMinLat, RegionMaxLat, RegionMinLon, RegionMaxLon,
+        ExtentKm.X, ExtentKm.Y, FeatureTable.Num(), *Breakdown, *ElevationSummary);
+
+    State.ImportSummary = FString::Printf(
+        TEXT("Import complete — no 3D assets generated (by design).\n\n")
+        TEXT("Region:     lat %.6f..%.6f, lon %.6f..%.6f\n")
+        TEXT("Extent:     %.2f x %.2f km\n")
+        TEXT("Features:   %d\n\n%s\nElevation:  %s\n\n")
+        TEXT("Next: the City Graph and Control Center (plan_v3_pipeline.md Phases 2-3) will turn ")
+        TEXT("these features into inspectable nodes and relationships before any geometry is built."),
+        RegionMinLat, RegionMaxLat, RegionMinLon, RegionMaxLon,
+        ExtentKm.X, ExtentKm.Y, FeatureTable.Num(), *Breakdown, *ElevationSummary);
+
+    State.GeneratedActorCount = 0;
+    State.StatusText = FText::FromString(TEXT("Import complete."));
     State.ProgressPercent = 1.0f;
     State.bIsGenerating = false;
     CurrentStepIndex = 4;

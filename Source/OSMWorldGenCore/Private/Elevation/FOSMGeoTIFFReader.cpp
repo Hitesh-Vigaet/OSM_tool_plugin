@@ -1,7 +1,7 @@
 // Copyright InviMind. All Rights Reserved.
 
-#include "Terrain/FOSMGeoTIFFReader.h"
-#include "OSMWorldGenGenerators.h"
+#include "Elevation/FOSMGeoTIFFReader.h"
+#include "OSMWorldGenCore.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
@@ -202,7 +202,7 @@ bool FOSMGeoTIFFReader::LoadHGT(const FString& FilePath, FOSMGeoTIFFTile& OutTil
     TArray<uint8> RawBytes;
     if (!FFileHelper::LoadFileToArray(RawBytes, *FilePath))
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("HGT Load: failed to read file '%s'"), *FilePath);
+        UE_LOG(LogOSMWorldGen, Error, TEXT("HGT Load: failed to read file '%s'"), *FilePath);
         return false;
     }
 
@@ -215,14 +215,14 @@ bool FOSMGeoTIFFReader::LoadHGT(const FString& FilePath, FOSMGeoTIFFTile& OutTil
     else if (ByteCount == 1201LL * 1201LL * 2) { Dim = 1201; }
     else
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("HGT Load: unexpected file size %lld in '%s'"), ByteCount, *FilePath);
+        UE_LOG(LogOSMWorldGen, Error, TEXT("HGT Load: unexpected file size %lld in '%s'"), ByteCount, *FilePath);
         return false;
     }
 
     int32 OriginLat, OriginLon;
     if (!ParseHGTFilename(FilePath, OriginLat, OriginLon))
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("HGT Load: could not parse lat/lon from filename '%s'"), *FilePath);
+        UE_LOG(LogOSMWorldGen, Error, TEXT("HGT Load: could not parse lat/lon from filename '%s'"), *FilePath);
         return false;
     }
 
@@ -265,7 +265,7 @@ bool FOSMGeoTIFFReader::LoadHGT(const FString& FilePath, FOSMGeoTIFFTile& OutTil
     OutTile.MinElevation = (MinH ==  FLT_MAX) ? 0.0f : MinH;
     OutTile.MaxElevation = (MaxH == -FLT_MAX) ? 0.0f : MaxH;
 
-    UE_LOG(LogOSMWorldGenGenerators, Log, TEXT("HGT Load: %d×%d, Elev [%.1f, %.1f]m, Tile origin lat=%d lon=%d"),
+    UE_LOG(LogOSMWorldGen, Log, TEXT("HGT Load: %d×%d, Elev [%.1f, %.1f]m, Tile origin lat=%d lon=%d"),
         Dim, Dim, OutTile.MinElevation, OutTile.MaxElevation, OriginLat, OriginLon);
 
     return true;
@@ -279,13 +279,13 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
     TArray<uint8> Data;
     if (!FFileHelper::LoadFileToArray(Data, *FilePath))
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("TIFF Load: failed to read '%s'"), *FilePath);
+        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: failed to read '%s'"), *FilePath);
         return false;
     }
 
     if (Data.Num() < 8)
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("TIFF Load: file too small '%s'"), *FilePath);
+        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: file too small '%s'"), *FilePath);
         return false;
     }
 
@@ -296,7 +296,7 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
     const bool bBE = (ByteOrder == TIFFConst::TIFF_BIGENDIAN);
     if (ByteOrder != TIFFConst::TIFF_LITTLEENDIAN && ByteOrder != TIFFConst::TIFF_BIGENDIAN)
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("TIFF Load: unrecognised byte-order 0x%04X in '%s'"), ByteOrder, *FilePath);
+        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: unrecognised byte-order 0x%04X in '%s'"), ByteOrder, *FilePath);
         return false;
     }
 
@@ -304,7 +304,7 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
     const uint16 Magic = ReadValue<uint16>(Buf + 2, bBE);
     if (Magic != 42)
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("TIFF Load: not a valid TIFF (magic=%d) '%s'"), Magic, *FilePath);
+        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: not a valid TIFF (magic=%d) '%s'"), Magic, *FilePath);
         return false;
     }
 
@@ -407,12 +407,12 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
 
     if (Width <= 0 || Height <= 0)
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("TIFF Load: invalid dimensions %dx%d in '%s'"), Width, Height, *FilePath);
+        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: invalid dimensions %dx%d in '%s'"), Width, Height, *FilePath);
         return false;
     }
     if (BitsPerSample != 16 && BitsPerSample != 32)
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("TIFF Load: unsupported bits-per-sample=%d in '%s'"), BitsPerSample, *FilePath);
+        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: unsupported bits-per-sample=%d in '%s'"), BitsPerSample, *FilePath);
         return false;
     }
 
@@ -434,7 +434,7 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
     }
     else
     {
-        UE_LOG(LogOSMWorldGenGenerators, Warning, TEXT("TIFF Load: no GeoTIFF geo-tags found, assuming 1-arcsec default origin in '%s'"), *FilePath);
+        UE_LOG(LogOSMWorldGen, Warning, TEXT("TIFF Load: no GeoTIFF geo-tags found, assuming 1-arcsec default origin in '%s'"), *FilePath);
         OutTile.GeoTransform[1] = 1.0 / 3600.0;
         OutTile.GeoTransform[5] = -1.0 / 3600.0;
     }
@@ -458,7 +458,7 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
 
     if (!bTiled && StripOffset == 0)
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("TIFF Load: no strip or tile offsets in '%s'"), *FilePath);
+        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: no strip or tile offsets in '%s'"), *FilePath);
         return false;
     }
 
@@ -467,7 +467,7 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
         && Compression != TIFFConst::COMPRESSION_DEFLATE
         && Compression != TIFFConst::COMPRESSION_DEFLATE_ADOBE)
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error,
+        UE_LOG(LogOSMWorldGen, Error,
             TEXT("TIFF Load: unsupported compression %d in '%s' (supported: none, LZW, Deflate)"),
             Compression, *FilePath);
         return false;
@@ -550,7 +550,7 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
         {
             // Only the single-tile case can be located from the scalar tag value read above;
             // multi-tile needs the full offset array, which this reader doesn't parse yet.
-            UE_LOG(LogOSMWorldGenGenerators, Error,
+            UE_LOG(LogOSMWorldGen, Error,
                 TEXT("TIFF Load: '%s' uses %dx%d tiles; only single-tile images are supported. ")
                 TEXT("Request a smaller region, or supply an uncompressed GeoTIFF."),
                 *FilePath, TilesAcross, TilesDown);
@@ -560,7 +560,7 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
         TArray<uint8> Tile;
         if (!ReadChunk(TileOffset, TileByteCount, TileBytes, Tile) || Tile.Num() < TileBytes)
         {
-            UE_LOG(LogOSMWorldGenGenerators, Error,
+            UE_LOG(LogOSMWorldGen, Error,
                 TEXT("TIFF Load: failed to decode tile data in '%s' (compression=%d, got %d of %d bytes)"),
                 *FilePath, Compression, Tile.Num(), TileBytes);
             return false;
@@ -594,7 +594,7 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
         {
             if (StripOffset + (uint32)ExpectedBytes > (uint32)Data.Num())
             {
-                UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("TIFF Load: strip data out of range in '%s'"), *FilePath);
+                UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: strip data out of range in '%s'"), *FilePath);
                 return false;
             }
             Raster.SetNumUninitialized(ExpectedBytes);
@@ -602,7 +602,7 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
         }
         else if (!ReadChunk(StripOffset, StripByteCount, ExpectedBytes, Raster) || Raster.Num() < ExpectedBytes)
         {
-            UE_LOG(LogOSMWorldGenGenerators, Error,
+            UE_LOG(LogOSMWorldGen, Error,
                 TEXT("TIFF Load: failed to decode strip data in '%s' (compression=%d)"), *FilePath, Compression);
             return false;
         }
@@ -626,7 +626,7 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
     OutTile.MinElevation = (MinH ==  FLT_MAX) ? 0.0f : MinH;
     OutTile.MaxElevation = (MaxH == -FLT_MAX) ? 0.0f : MaxH;
 
-    UE_LOG(LogOSMWorldGenGenerators, Log, TEXT("TIFF Load: %d×%d, %d-bit, Elev [%.1f, %.1f]m"),
+    UE_LOG(LogOSMWorldGen, Log, TEXT("TIFF Load: %d×%d, %d-bit, Elev [%.1f, %.1f]m"),
         Width, Height, BitsPerSample, OutTile.MinElevation, OutTile.MaxElevation);
 
     return true;
@@ -647,6 +647,6 @@ bool FOSMGeoTIFFReader::Load(const FString& FilePath, FOSMGeoTIFFTile& OutTile, 
         return LoadTIFF(FilePath, OutTile, OutHeightData);
     }
 
-    UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("GeoTIFF Load: unsupported extension '.%s' in '%s'"), *Ext, *FilePath);
+    UE_LOG(LogOSMWorldGen, Error, TEXT("GeoTIFF Load: unsupported extension '.%s' in '%s'"), *Ext, *FilePath);
     return false;
 }

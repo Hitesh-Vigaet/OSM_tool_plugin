@@ -1,6 +1,6 @@
 // Copyright InviMind. All Rights Reserved.
 
-#include "Terrain/FOSMDEMCRSAlignment.h"
+#include "Elevation/FOSMDEMCRSAlignment.h"
 
 // ---------------------------------------------------------------------------
 FVector FOSMDEMCRSAlignment::DEMPixelToUnreal(

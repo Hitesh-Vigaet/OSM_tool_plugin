@@ -3,7 +3,7 @@
     "Version": 1,
     "VersionName": "1.0.0",
     "FriendlyName": "OSM World Generator",
-    "Description": "Import OpenStreetMap data and generate georeferenced 3D worlds in Unreal Engine 5.8",
+    "Description": "Import OpenStreetMap and elevation data as a validated, inspectable city graph in Unreal Engine 5.8",
     "Category": "GIS / World Building",
     "CreatedBy": "InviMind",
     "CreatedByURL": "",
@@ -23,11 +23,6 @@
         },
         {
             "Name": "OSMWorldGenEditor",
-            "Type": "Editor",
-            "LoadingPhase": "Default"
-        },
-        {
-            "Name": "OSMWorldGenGenerators",
             "Type": "Editor",
             "LoadingPhase": "Default"
         }

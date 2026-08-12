@@ -17,7 +17,7 @@
  * Reference: Lemoine et al. (1998) "The Development of the Joint NASA GSFC and
  *            NIMA Geopotential Model EGM96"
  */
-class OSMWORLDGENGENERATORS_API FOSMGeoidCorrection
+class OSMWORLDGENCORE_API FOSMGeoidCorrection
 {
 public:
     /**

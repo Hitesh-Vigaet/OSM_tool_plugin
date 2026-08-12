@@ -89,6 +89,14 @@ public:
         FText StatusText;
         bool bIsGenerating = false;
         int32 GeneratedActorCount = 0;
+
+        /**
+         * Human-readable result of the import: region, extent, per-category feature counts,
+         * DEM coverage. Replaces the old "N actors spawned" summary — the wizard no longer
+         * generates anything (plan_v3_pipeline.md Phase 0), so what matters is whether the
+         * data was understood correctly.
+         */
+        FString ImportSummary;
     };
 
     /** Opens the wizard window in Unreal Editor */

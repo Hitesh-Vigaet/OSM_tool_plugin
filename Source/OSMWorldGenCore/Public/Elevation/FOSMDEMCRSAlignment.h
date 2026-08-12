@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Terrain/FOSMGeoTIFFTile.h"
+#include "Elevation/FOSMGeoTIFFTile.h"
 #include "CRS/FOSMCRSTransformer.h"
 
 /**
@@ -16,7 +16,7 @@
  * This class provides the direct DEM pixel → UE world space conversion
  * and coverage diagnostics.
  */
-class OSMWORLDGENGENERATORS_API FOSMDEMCRSAlignment
+class OSMWORLDGENCORE_API FOSMDEMCRSAlignment
 {
 public:
     /**

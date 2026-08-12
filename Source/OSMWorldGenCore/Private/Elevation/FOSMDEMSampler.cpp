@@ -1,8 +1,8 @@
 // Copyright InviMind. All Rights Reserved.
 
-#include "Terrain/FOSMDEMSampler.h"
-#include "Terrain/FOSMGeoTIFFReader.h"
-#include "OSMWorldGenGenerators.h"
+#include "Elevation/FOSMDEMSampler.h"
+#include "Elevation/FOSMGeoTIFFReader.h"
+#include "OSMWorldGenCore.h"
 
 // ---------------------------------------------------------------------------
 bool FOSMDEMSampler::Load(const FString& FilePath)
@@ -11,7 +11,7 @@ bool FOSMDEMSampler::Load(const FString& FilePath)
 
     if (!FOSMGeoTIFFReader::Load(FilePath, Tile, HeightData))
     {
-        UE_LOG(LogOSMWorldGenGenerators, Error, TEXT("DEMSampler: failed to load '%s'"), *FilePath);
+        UE_LOG(LogOSMWorldGen, Error, TEXT("DEMSampler: failed to load '%s'"), *FilePath);
         return false;
     }
 
@@ -19,7 +19,7 @@ bool FOSMDEMSampler::Load(const FString& FilePath)
 
     if (bIsLoaded)
     {
-        UE_LOG(LogOSMWorldGenGenerators, Log,
+        UE_LOG(LogOSMWorldGen, Log,
             TEXT("DEMSampler: loaded %d×%d DEM. Bounds Lat[%.4f, %.4f] Lon[%.4f, %.4f]. Elev [%.1f, %.1f]m"),
             Tile.Width, Tile.Height,
             Tile.GetMinLat(), Tile.GetMaxLat(),

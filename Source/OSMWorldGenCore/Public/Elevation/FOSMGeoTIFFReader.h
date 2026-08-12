@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Terrain/FOSMGeoTIFFTile.h"
+#include "Elevation/FOSMGeoTIFFTile.h"
 
 /**
  * Lightweight GeoTIFF reader that operates without GDAL.
@@ -20,7 +20,7 @@
  *
  * When OSM_WITH_GDAL=1, these limitations are lifted (GDAL handles all formats).
  */
-class OSMWORLDGENGENERATORS_API FOSMGeoTIFFReader
+class OSMWORLDGENCORE_API FOSMGeoTIFFReader
 {
 public:
     /**
