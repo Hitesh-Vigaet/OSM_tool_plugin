@@ -37,9 +37,16 @@ public:
     UPROPERTY(EditAnywhere, config, Category = "Data Sources", meta = (DisplayName = "OpenTopography API Key"))
     FString OpenTopographyApiKey;
 
-    /** OpenTopography global DEM dataset identifier. SRTMGL3 (~90m) is the widest-coverage default. */
+    /**
+     * OpenTopography global DEM dataset identifier.
+     *
+     * SRTMGL1 (1 arc-second, ~30m) is the default: at city scale a 1.5 km region is only
+     * ~11 px across in SRTMGL3 (~90m), which flattens the terrain into a featureless ramp.
+     * SRTMGL1 gives ~3x the linear resolution for the same area. Both cover 60N-56S; switch
+     * to SRTMGL3 only if a region returns no data.
+     */
     UPROPERTY(EditAnywhere, config, Category = "Data Sources", meta = (DisplayName = "OpenTopography DEM Type"))
-    FString OpenTopographyDemType = TEXT("SRTMGL3");
+    FString OpenTopographyDemType = TEXT("SRTMGL1");
 
     /** Overpass API endpoint used for .osm vector data fetch. No API key required. */
     UPROPERTY(EditAnywhere, config, Category = "Data Sources", meta = (DisplayName = "Overpass API URL"))
