@@ -1,0 +1,16 @@
+# Unreal build artifacts — regenerated on every build, never source of truth
+Binaries/
+Intermediate/
+Build/
+DerivedDataCache/
+Saved/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.xcodeproj/
+*.xcworkspace/
+compile_commands.json
