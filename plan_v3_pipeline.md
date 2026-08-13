@@ -541,6 +541,52 @@ allocated directly. Most PCG material still shows the old form.
 
 ## Phase 5 — Generation (only after 1–4 are signed off)
 
+### 5.0 Decided: footprints are generated, not swapped for prefabs
+
+Measured on a real 1 km² Bangalore region, 1,314 buildings:
+
+| | |
+|---|---|
+| smallest footprint | 19.5 m² |
+| median | 155.9 m² |
+| largest | **7,814 m² — 401x the smallest** |
+| aspect ratio | median 1.41, p95 2.05, max 6.1 |
+| vertices | 4 to 34; **95% have <= 5 corners** |
+
+No library of prefab meshes survives a 401x size range. Scaling one mesh across it produces 20 m²
+huts and 7,800 m² apartment blocks built from the same stretched geometry, with windows and doors
+scaled to nonsense. This is not a content problem to be solved by authoring more meshes — it is
+the wrong mapping.
+
+**The rule:**
+
+- **Area and linear features generate geometry from their own outline.** A building is an
+  extrusion of *its* polygon to *its* height; a road is a mesh swept along *its* spline at *its*
+  width. Every feature fits because it is built from itself. The 95% that are near-rectangular
+  extrude trivially; the 67 complex ones need real triangulation, at a harmless 34 vertices max.
+- **Point features use instanced meshes.** Trees, lamps, benches, vehicles — things with no
+  footprint to conform to, where a prefab is exactly right.
+
+**Consequence for the asset system (Phase 3.5 / 4.2):** the ratio machinery stays, but for areas
+and lines it rations a **style**, not a mesh:
+
+| Feature | Generated as | Rule selects |
+|---|---|---|
+| Building | extruded footprint | facade style — wall/roof material, window density, floor height |
+| RoadSegment | swept spline mesh | surface material + profile |
+| WaterBody | surface at polygon | water material |
+| VegetationArea | PCG scatter inside polygon | tree/shrub **meshes** |
+| Amenity | point instance | prop **mesh** |
+
+"60% concrete, 30% brick, 10% glass" across 1,317 buildings then works at every footprint size,
+which a mesh library cannot do. The UI currently restricts slots to `UStaticMesh`; that becomes
+per-category — a style data asset for buildings and roads, a mesh for scatter and props.
+
+This is also what the established OSM-to-3D pipelines do (osm2world, Cesium OSM Buildings, Blosm),
+for the same reason.
+
+
+
 Deliberately not detailed yet — it should be designed against a working graph, not imagined now.
 Non-negotiable rules carried forward from this session's failures:
 
