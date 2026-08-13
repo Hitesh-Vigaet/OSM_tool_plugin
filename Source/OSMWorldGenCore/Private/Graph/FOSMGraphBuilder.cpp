@@ -233,6 +233,14 @@ void FOSMGraphBuilder::BuildNodes(
                 Node.Metrics.LengthMeters = RingLengthMeters(Line, Metric, /*bClosed*/ false);
             }
 
+            // Carried through from classification: the way crossed the region boundary and
+            // arrived truncated. Usable, but the user should be able to see which nodes are
+            // complete and which are not.
+            if (Feature.Tags.Contains(TEXT("osmworldgen:partial_geometry")))
+            {
+                Node.ValidationFlags.AddUnique(TEXT("node.geometry.partial"));
+            }
+
             Graph.Geometry.GetCentroid(Node.Geometry, Node.Metrics.CentroidLatLon);
             Node.Metrics.HeightMeters = Feature.Computed.HeightMeters;
             Node.Metrics.WidthMeters = Feature.Computed.WidthMeters;
@@ -393,17 +401,40 @@ void FOSMGraphBuilder::BuildSpatial(
             return HashCombine(GetTypeHash(Row), GetTypeHash(Col));
         };
 
-        // Index each road by every cell its vertices fall in, so a long road is findable from
-        // anywhere along its length rather than only near its centroid.
+        // Index each road into every cell its SEGMENTS pass through, not merely the cells its
+        // vertices land in.
+        //
+        // Vertex-only indexing leaves a real gap: OSM road vertices are often hundreds of metres
+        // apart on a straight stretch, so a long segment crosses cells containing none of its
+        // vertices. A building beside the middle of such a road then finds no candidate and is
+        // wrongly flagged as having no street — observed as 7 of 19 buildings unlinked next to a
+        // major road. Walking each segment at half-cell steps closes it.
         TMap<uint32, TArray<int32>> Grid;
         for (const int32 RoadId : Roads)
         {
             const FOSMGraphNode& Road = Graph.Nodes[RoadId];
             if (!Road.HasGeometry()) continue;
 
-            for (const FVector2D& Point : Graph.Geometry.GetOuterRing(Road.Geometry))
+            const TArrayView<const FVector2D> Line = Graph.Geometry.GetOuterRing(Road.Geometry);
+            for (int32 Index = 0; Index < Line.Num(); ++Index)
             {
-                Grid.FindOrAdd(CellKey(Point)).AddUnique(RoadId);
+                Grid.FindOrAdd(CellKey(Line[Index])).AddUnique(RoadId);
+
+                if (Index + 1 >= Line.Num()) break;
+
+                const FVector2D& Start = Line[Index];
+                const FVector2D& End = Line[Index + 1];
+
+                // Half-cell steps guarantee no cell along the segment is skipped.
+                const double SpanLat = FMath::Abs(End.X - Start.X) / CellLatDeg;
+                const double SpanLon = FMath::Abs(End.Y - Start.Y) / CellLonDeg;
+                const int32 StepCount = FMath::CeilToInt32(2.0 * FMath::Max(SpanLat, SpanLon));
+
+                for (int32 Step = 1; Step < StepCount; ++Step)
+                {
+                    const double Alpha = static_cast<double>(Step) / static_cast<double>(StepCount);
+                    Grid.FindOrAdd(CellKey(FMath::Lerp(Start, End, Alpha))).AddUnique(RoadId);
+                }
             }
         }
 
@@ -497,10 +528,15 @@ void FOSMGraphBuilder::BuildGroups(
         FOSMNodeGroup Group;
         Group.Kind = EOSMGroupKind::Category;
         Group.NodeType = Type;
-        // Naive "+s" produced "Amenitys". The label is what the user reads in the Control
-        // Center, so it is worth getting right.
+        // "Amenity" -> "Amenities", but "Waterway" -> "Waterways": the y->ies rule only applies
+        // after a consonant. Applying it unconditionally produced "Waterwaies"/"Railwaies".
         const FString TypeName = OSMNodeTypeToString(Type);
-        Group.Name = TypeName.EndsWith(TEXT("y"))
+        const TCHAR PenultimateChar = TypeName.Len() >= 2 ? TypeName[TypeName.Len() - 2] : TEXT('\0');
+        const bool bVowelBeforeY =
+            PenultimateChar == TEXT('a') || PenultimateChar == TEXT('e') || PenultimateChar == TEXT('i')
+            || PenultimateChar == TEXT('o') || PenultimateChar == TEXT('u');
+
+        Group.Name = (TypeName.EndsWith(TEXT("y")) && !bVowelBeforeY)
             ? TypeName.LeftChop(1) + TEXT("ies")
             : TypeName + TEXT("s");
         Group.NodeIds = MoveTemp(Members);

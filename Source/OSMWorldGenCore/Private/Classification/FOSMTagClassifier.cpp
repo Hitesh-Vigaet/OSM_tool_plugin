@@ -120,6 +120,10 @@ bool FOSMTagClassifier::ClassifyAll(
     const int32 TotalWays = ParseResult.Ways.Num();
     int32 ProcessedCount = 0;
 
+    /** Ways kept despite missing some node refs, and ways with too few points to use at all. */
+    int32 PartialGeometryCount = 0;
+    int32 SkippedNoGeometry = 0;
+
     if (OnProgress)
     {
         OnProgress(0.0f, NSLOCTEXT("OSM", "StartingClassification", "Classifying features..."));
@@ -133,9 +137,32 @@ bool FOSMTagClassifier::ClassifyAll(
         }
 
         const FOSMWay& Way = Pair.Value;
-        if (!Way.AreCoordinatesResolved())
+
+        // Keep PARTIALLY resolved ways rather than requiring every node to be present.
+        //
+        // AreCoordinatesResolved() demands ResolvedCoords.Num() == NodeRefs.Num(), which was
+        // fine when Overpass returned every node of every way. Now that the fetch bounds nodes
+        // to the region (so a 1 km request stops pulling in 13 km roads), a way crossing the
+        // boundary legitimately arrives with some refs missing — and this check silently threw
+        // all of them away. Measured on a real 1 km region: 33 ways discarded, 32 of them still
+        // usable, including 22 of 62 roads. That silent loss then made buildings look streetless.
+        //
+        // The parser preserves the order of the nodes it did resolve, so what remains is a
+        // correct prefix/subset of the geometry: a road truncated at the region edge, which is
+        // exactly what we want.
+        const int32 ResolvedCount = Way.ResolvedCoords.Num();
+        const int32 MinimumPoints = Way.bIsClosed ? 3 : 2;
+
+        if (ResolvedCount < MinimumPoints)
         {
+            ++SkippedNoGeometry;
             continue;
+        }
+
+        const bool bPartialGeometry = (ResolvedCount != Way.NodeRefs.Num());
+        if (bPartialGeometry)
+        {
+            ++PartialGeometryCount;
         }
 
         FString SubType;
@@ -173,6 +200,14 @@ bool FOSMTagClassifier::ClassifyAll(
             }
         }
 
+        if (bPartialGeometry)
+        {
+            // Recorded on the feature itself so it survives into the graph node and is visible
+            // in the Control Center. A truncated road is usable but not complete, and the user
+            // should be able to tell the difference without re-reading the source file.
+            Feature.Tags.Add(TEXT("osmworldgen:partial_geometry"), TEXT("true"));
+        }
+
         Feature.Computed = ResolveProperties(FeatureType, SubType, Way.Tags);
         Feature.Computed.CentroidLatLon = Way.ComputeCentroid();
 
@@ -191,6 +226,9 @@ bool FOSMTagClassifier::ClassifyAll(
         OnProgress(1.0f, NSLOCTEXT("OSM", "ClassificationComplete", "Feature classification complete!"));
     }
 
-    UE_LOG(LogOSMWorldGen, Log, TEXT("Classification complete: %s"), *OutTable.GetSummary());
+    UE_LOG(LogOSMWorldGen, Log,
+        TEXT("Classification complete: %s | %d way(s) kept with partial geometry (truncated at the ")
+        TEXT("region boundary), %d skipped for having fewer than the minimum usable points"),
+        *OutTable.GetSummary(), PartialGeometryCount, SkippedNoGeometry);
     return true;
 }

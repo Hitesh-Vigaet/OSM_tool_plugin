@@ -182,7 +182,24 @@ def build_osm_fixtures(cache_dir):
     dangling_ways = list(ways[:-1]) + [(999999001, [nodes[0][0], 888888888], {"highway": "residential"})]
     write_osm(os.path.join(DATA, "dangling_refs.osm"), nodes, dangling_ways)
 
-    # 6/7. Degenerate inputs that must fail cleanly rather than crash.
+    # 6. Ways whose geometry is TRUNCATED at the region boundary.
+    #
+    #    This is what the node-bounded Overpass query produces for any way crossing the edge,
+    #    and it must be KEPT with the points that did arrive, not discarded. Requiring every
+    #    node to be present silently threw away 33 ways on a real 1 km region — 22 of 62 roads —
+    #    which then made buildings appear to have no street.
+    #
+    #    Built by removing every third node from the file while leaving the ways untouched, so
+    #    most ways lose some refs but keep enough points to remain usable.
+    kept_nodes = [node for index, node in enumerate(nodes) if index % 3 != 0]
+    kept_ids = {node[0] for node in kept_nodes}
+    usable = sum(
+        1 for _, refs, _ in ways
+        if sum(1 for ref in refs if ref in kept_ids) >= 2)
+    write_osm(os.path.join(DATA, "partial_geometry.osm"), kept_nodes, ways)
+    print(f"  partial_geometry.osm  {len(kept_nodes)}/{len(nodes)} nodes kept, {usable} ways still usable")
+
+    # 7/8. Degenerate inputs that must fail cleanly rather than crash.
     open(os.path.join(DATA, "empty.osm"), "w").close()
     with open(os.path.join(DATA, "not_osm.osm"), "w", encoding="utf-8", newline="\n") as handle:
         handle.write('<?xml version="1.0" encoding="UTF-8"?>\n<html><body>Not OSM data at all.</body></html>\n')

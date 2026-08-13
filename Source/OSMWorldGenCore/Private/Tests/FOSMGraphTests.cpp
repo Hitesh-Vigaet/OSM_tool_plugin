@@ -538,4 +538,76 @@ bool FOSMGraphValidationTest::RunTest(const FString& Parameters)
     return true;
 }
 
+// ===========================================================================
+// Truncated geometry must survive classification
+// ===========================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOSMGraphPartialGeometryTest,
+    "OSMWorldGen.Graph.PartialGeometry",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FOSMGraphPartialGeometryTest::RunTest(const FString& Parameters)
+{
+    const FString OSMPath = OSMGraphTest::GetCorpusPath(TEXT("partial_geometry.osm"));
+    if (!FPaths::FileExists(OSMPath))
+    {
+        AddWarning(TEXT("Corpus missing. Run: python3 Tests/make_corpus.py"));
+        return true;
+    }
+
+    const FOSMRegion Region = OSMGraphTest::GetTestRegion();
+
+    FOSMFeatureTable Features;
+    const FOSMImportReport ImportReport =
+        FOSMImportValidator::Run(Region, OSMPath, FString(), Features);
+
+    // Ways whose nodes are partly missing are the NORMAL result of bounding the Overpass query
+    // to the region: anything crossing the boundary arrives truncated. Classification used to
+    // require every node to be present and silently discarded all of them — 33 ways on a real
+    // 1 km region, including 22 of 62 roads — which then made buildings appear streetless.
+    //
+    // The regression this guards is silence, not strictness: partial ways must survive with the
+    // points that did arrive, and must be identifiable afterwards.
+    TestTrue(TEXT("A file of truncated ways still imports"), ImportReport.IsAccepted());
+    TestTrue(TEXT("Truncated ways are kept, not discarded"), Features.Num() > 0);
+    TestTrue(TEXT("Dangling references are reported"),
+        ImportReport.Validation.HasCode(TEXT("osm.refs.dangling")));
+
+    FOSMGraphReport GraphReport;
+    const FOSMGraphBuildOptions Options;
+    UOSMCityGraph* Graph = FOSMGraphBuilder::Build(
+        Features, Region, Options, GetTransientPackage(), GraphReport);
+
+    if (!Graph)
+    {
+        AddError(TEXT("Graph build returned nothing."));
+        return true;
+    }
+
+    TestTrue(TEXT("Truncated ways become nodes"), Graph->NumNodes() > 0);
+    TestTrue(TEXT("Every feature is still accounted for"), GraphReport.IsComplete());
+
+    int32 PartialNodes = 0;
+    for (const FOSMGraphNode& Node : Graph->Nodes)
+    {
+        if (Node.ValidationFlags.Contains(TEXT("node.geometry.partial")))
+        {
+            ++PartialNodes;
+
+            // Kept AND usable: a flag that marked unusable geometry would just be a slower way
+            // of dropping it.
+            TestTrue(TEXT("A partial node still has geometry"), Node.HasGeometry());
+            TestTrue(TEXT("A partial node still has enough points"),
+                Graph->Geometry.GetOuterRing(Node.Geometry).Num() >= 2);
+        }
+    }
+
+    TestTrue(TEXT("Truncated geometry is marked, not silently accepted"), PartialNodes > 0);
+    AddInfo(FString::Printf(TEXT("%d of %d nodes carry truncated geometry."),
+        PartialNodes, Graph->NumNodes()));
+
+    return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
