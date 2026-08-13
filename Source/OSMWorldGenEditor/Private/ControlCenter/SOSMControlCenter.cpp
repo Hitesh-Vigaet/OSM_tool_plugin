@@ -5,6 +5,8 @@
 #include "Scene/FOSMSceneSetup.h"
 #include "Session/FOSMGraphSession.h"
 #include "Generation/FOSMDryRunReport.h"
+#include "Engine/StaticMesh.h"
+#include "PropertyCustomizationHelpers.h"
 #include "Settings/UOSMWorldGenSettings.h"
 #include "Elevation/FOSMGeoTIFFTile.h"
 #include "Graph/UOSMCityGraph.h"
@@ -1052,10 +1054,48 @@ void SOSMControlCenter::RefreshAssetRules()
 
                 + SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
                 [
-                    SNew(STextBlock).Text(FText::FromString(
-                        ExistingRule->Choices[ChoiceIndex].Label.IsEmpty()
-                            ? ExistingRule->Choices[ChoiceIndex].Asset.ToString()
-                            : ExistingRule->Choices[ChoiceIndex].Label))
+                    // The engine's own asset picker, so it behaves the way every other asset
+                    // field in the editor does: a dropdown, drag-and-drop from the Content
+                    // Browser, "use selected", and a browse-to button. A hand-rolled text field
+                    // would have been a worse version of something the user already knows.
+                    SNew(SObjectPropertyEntryBox)
+                    .AllowedClass(UStaticMesh::StaticClass())
+                    .AllowClear(true)
+                    .DisplayUseSelected(true)
+                    .DisplayBrowse(true)
+                    .ThumbnailPool(nullptr)
+                    .ObjectPath_Lambda([this, Type, ChoiceIndex]() -> FString
+                    {
+                        const FOSMAssetRule* Rule = Graph.IsValid()
+                            ? Graph->Config.FindRule(Type, FString()) : nullptr;
+
+                        return (Rule && Rule->Choices.IsValidIndex(ChoiceIndex))
+                            ? Rule->Choices[ChoiceIndex].Asset.ToString()
+                            : FString();
+                    })
+                    .OnObjectChanged_Lambda([this, Type, ChoiceIndex](const FAssetData& AssetData)
+                    {
+                        if (!Graph.IsValid()) return;
+
+                        FOSMAssetRule& Rule = Graph->Config.FindOrAddRule(Type, FString());
+                        if (!Rule.Choices.IsValidIndex(ChoiceIndex)) return;
+
+                        Rule.Choices[ChoiceIndex].Asset = AssetData.ToSoftObjectPath();
+
+                        // The label follows the asset unless the slot has been renamed, so the
+                        // dry run reads "Warehouse_01" rather than "Slot 1" without the user
+                        // having to type the name twice.
+                        const FString AssetName = AssetData.AssetName.ToString();
+                        if (Rule.Choices[ChoiceIndex].Label.StartsWith(TEXT("Slot "))
+                            || Rule.Choices[ChoiceIndex].Label.IsEmpty())
+                        {
+                            Rule.Choices[ChoiceIndex].Label = AssetName.IsEmpty()
+                                ? FString::Printf(TEXT("Slot %d"), ChoiceIndex + 1)
+                                : AssetName;
+                        }
+
+                        RefreshAssetRules();
+                    })
                 ]
 
                 + SHorizontalBox::Slot().AutoWidth()
