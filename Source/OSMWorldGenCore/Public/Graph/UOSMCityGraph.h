@@ -39,6 +39,13 @@ struct OSMWORLDGENCORE_API FOSMNodeMetrics
     /** Width in m, for roads. 0 when unknown. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "OSM|Graph")
     double WidthMeters = 0.0;
+
+    /** Elevation range in m. Populated for TerrainTile nodes; 0 elsewhere. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "OSM|Graph")
+    double MinElevationMeters = 0.0;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "OSM|Graph")
+    double MaxElevationMeters = 0.0;
 };
 
 /**

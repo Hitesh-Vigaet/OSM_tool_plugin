@@ -1,9 +1,12 @@
 // Copyright InviMind. All Rights Reserved.
 
 #include "Graph/FOSMGraphBuilder.h"
+#include "Elevation/FOSMDEMSampler.h"
+#include "Elevation/FOSMGeoTIFFTile.h"
 #include "Model/FOSMFeature.h"
 #include "Model/FOSMFeatureTable.h"
 #include "OSMWorldGenCore.h"
+#include "Misc/Paths.h"
 
 namespace
 {
@@ -249,6 +252,72 @@ void FOSMGraphBuilder::BuildNodes(
             ++Report.NodesCreated;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+void FOSMGraphBuilder::BuildTerrain(
+    UOSMCityGraph& Graph, const FOSMGraphBuildOptions& Options, FOSMGraphReport& Report)
+{
+    if (Options.DEMFilePath.IsEmpty())
+    {
+        return;
+    }
+
+    FOSMDEMSampler Sampler;
+    if (!Sampler.Load(Options.DEMFilePath))
+    {
+        // Not fatal: a graph without elevation is still a usable description of the city, and
+        // the import gates already rejected genuinely broken rasters. Reported rather than
+        // silent, because "my terrain is flat" should always have a findable reason.
+        Report.Validation.AddWarning(TEXT("graph.terrain.loadfailed"),
+            FString::Printf(TEXT("Elevation raster '%s' could not be read, so the graph has no ")
+                            TEXT("terrain node and features carry no ground height."),
+                            *Options.DEMFilePath));
+        return;
+    }
+
+    const FOSMGeoTIFFTile& Tile = Sampler.GetTileMetadata();
+
+    // Footprint of the raster, as an area so it stores and draws like any other node rather
+    // than needing a special case everywhere.
+    TArray<TArray<FVector>> Rings;
+    Rings.Add({
+        FVector(Tile.GetMinLat(), Tile.GetMinLon(), 0.0),
+        FVector(Tile.GetMaxLat(), Tile.GetMinLon(), 0.0),
+        FVector(Tile.GetMaxLat(), Tile.GetMaxLon(), 0.0),
+        FVector(Tile.GetMinLat(), Tile.GetMaxLon(), 0.0) });
+
+    const FLocalMetric Metric(0.5 * (Graph.RegionMinLat + Graph.RegionMaxLat));
+
+    FOSMGraphNode Terrain;
+    Terrain.Id = Graph.Nodes.Num();
+    Terrain.Type = EOSMNodeType::TerrainTile;
+    Terrain.SubType = TEXT("dem");
+    Terrain.Name = FPaths::GetCleanFilename(Options.DEMFilePath);
+    Terrain.Geometry = Graph.Geometry.AddArea(Rings);
+
+    const TArrayView<const FVector2D> Outer = Graph.Geometry.GetOuterRing(Terrain.Geometry);
+    Terrain.Metrics.AreaSqm = RingAreaSqm(Outer, Metric);
+    Terrain.Metrics.LengthMeters = RingLengthMeters(Outer, Metric, /*bClosed*/ true);
+    Terrain.Metrics.MinElevationMeters = Tile.MinElevation;
+    Terrain.Metrics.MaxElevationMeters = Tile.MaxElevation;
+    Graph.Geometry.GetCentroid(Terrain.Geometry, Terrain.Metrics.CentroidLatLon);
+
+    // Raster shape recorded as tags, so the Control Center and any later consumer can report
+    // resolution without reopening the file.
+    Terrain.Tags.Add(TEXT("osmworldgen:dem_width"), FString::FromInt(Tile.Width));
+    Terrain.Tags.Add(TEXT("osmworldgen:dem_height"), FString::FromInt(Tile.Height));
+    Terrain.Tags.Add(TEXT("osmworldgen:dem_arcseconds"),
+        FString::SanitizeFloat(Tile.GetResolutionArcSeconds()));
+    Terrain.Tags.Add(TEXT("osmworldgen:dem_path"), Options.DEMFilePath);
+
+    if (Tile.MaxElevation - Tile.MinElevation <= 0.0)
+    {
+        Terrain.ValidationFlags.AddUnique(TEXT("node.terrain.norelief"));
+    }
+
+    Graph.Nodes.Add(MoveTemp(Terrain));
+    ++Report.NodesCreated;
 }
 
 // ---------------------------------------------------------------------------
@@ -649,8 +718,13 @@ void FOSMGraphBuilder::ValidateGraph(
         //
         // Must be zero: clipping runs before the graph is built, so anything outside means the
         // clip did not do its job. This is the check that would have caught the 40 km way.
+        //
+        // The terrain tile is exempt: the DEM is deliberately fetched with a margin beyond the
+        // region so the raster fully covers it after grid snapping, so its footprint being
+        // larger is the design working, not a clipping failure.
         FVector2D BoundsMin, BoundsMax;
-        if (Graph.Geometry.GetBounds(Node.Geometry, BoundsMin, BoundsMax))
+        if (Node.Type != EOSMNodeType::TerrainTile
+            && Graph.Geometry.GetBounds(Node.Geometry, BoundsMin, BoundsMax))
         {
             // The same allowance feature clipping used, so the two cannot disagree. Anything
             // beyond this did not come from a boundary-straddling feature and means the clip
@@ -773,6 +847,7 @@ UOSMCityGraph* FOSMGraphBuilder::Build(
     Graph->RegionMaxLon = Region.GetMaxLon();
 
     BuildNodes(Features, *Graph, OutReport);
+    BuildTerrain(*Graph, Options, OutReport);
     BuildTopology(*Graph, OutReport);
     BuildSpatial(*Graph, Options, OutReport);
     BuildGroups(*Graph, Options, OutReport);

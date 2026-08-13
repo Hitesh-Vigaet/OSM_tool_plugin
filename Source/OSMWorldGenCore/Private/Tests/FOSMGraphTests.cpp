@@ -159,9 +159,15 @@ bool FOSMGraphNodeBuildTest::RunTest(const FString& Parameters)
     // the rejection list has vanished, which is the failure mode that made "where did my water
     // go?" impossible to answer.
     TestTrue(TEXT("Every feature is accounted for"), Report.IsComplete());
+    // Derived nodes (junctions, the terrain tile) have no feature behind them, so they are
+    // excluded from the feature accounting rather than inflating it.
+    const int32 DerivedNodes =
+        Graph->CountNodesOfType(EOSMNodeType::Junction) +
+        Graph->CountNodesOfType(EOSMNodeType::TerrainTile);
+
     TestEqual(TEXT("Considered == created + rejected"),
-        Report.FeaturesConsidered, Report.NodesCreated - Graph->CountNodesOfType(EOSMNodeType::Junction)
-            + Report.RejectedFeatures.Num());
+        Report.FeaturesConsidered,
+        Report.NodesCreated - DerivedNodes + Report.RejectedFeatures.Num());
 
     // Every node must carry identity and geometry, or be a derived node that legitimately has
     // neither.
@@ -170,9 +176,9 @@ bool FOSMGraphNodeBuildTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Node id matches its index"), Node.Id, Graph->Nodes.IndexOfByPredicate(
             [&Node](const FOSMGraphNode& Other) { return Other.Id == Node.Id; }));
 
-        if (Node.Type == EOSMNodeType::Junction)
+        if (Node.Type == EOSMNodeType::Junction || Node.Type == EOSMNodeType::TerrainTile)
         {
-            TestEqual(TEXT("Junctions are derived, so carry no OSM id"), Node.OSMId, (int64)0);
+            TestEqual(TEXT("Derived nodes carry no OSM id"), Node.OSMId, (int64)0);
         }
         else
         {
@@ -606,6 +612,103 @@ bool FOSMGraphPartialGeometryTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Truncated geometry is marked, not silently accepted"), PartialNodes > 0);
     AddInfo(FString::Printf(TEXT("%d of %d nodes carry truncated geometry."),
         PartialNodes, Graph->NumNodes()));
+
+    return true;
+}
+
+// ===========================================================================
+// Terrain enters the graph, not around it
+// ===========================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOSMGraphTerrainNodeTest,
+    "OSMWorldGen.Graph.TerrainNode",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FOSMGraphTerrainNodeTest::RunTest(const FString& Parameters)
+{
+    const FString OSMPath = OSMGraphTest::GetCorpusPath(TEXT("valid_small.osm"));
+    const FString DEMPath = OSMGraphTest::GetCorpusPath(TEXT("valid_striped.tif"));
+
+    if (!FPaths::FileExists(OSMPath) || !FPaths::FileExists(DEMPath))
+    {
+        AddWarning(TEXT("Corpus missing. Run: python3 Tests/make_corpus.py"));
+        return true;
+    }
+
+    const FOSMRegion Region = OSMGraphTest::GetTestRegion();
+
+    FOSMFeatureTable Features;
+    const FOSMImportReport ImportReport =
+        FOSMImportValidator::Run(Region, OSMPath, DEMPath, Features);
+
+    if (!ImportReport.IsAccepted())
+    {
+        AddError(TEXT("Corpus baseline failed import with a DEM."));
+        return true;
+    }
+
+    // ---- With a DEM: exactly one terrain node, carrying real elevation ----
+    {
+        FOSMGraphBuildOptions Options;
+        Options.DEMFilePath = DEMPath;
+
+        FOSMGraphReport Report;
+        UOSMCityGraph* Graph = FOSMGraphBuilder::Build(
+            Features, Region, Options, GetTransientPackage(), Report);
+
+        if (!Graph)
+        {
+            AddError(TEXT("Graph build returned nothing."));
+            return true;
+        }
+
+        TestTrue(TEXT("Graph with a DEM is accepted"), Report.IsAccepted());
+        TestEqual(TEXT("Exactly one terrain node"),
+            Graph->CountNodesOfType(EOSMNodeType::TerrainTile), 1);
+
+        const TArray<int32> TerrainIds = Graph->GetNodesOfType(EOSMNodeType::TerrainTile);
+        if (TerrainIds.Num() == 1)
+        {
+            const FOSMGraphNode& Terrain = Graph->Nodes[TerrainIds[0]];
+
+            TestTrue(TEXT("Terrain node has geometry"), Terrain.HasGeometry());
+            TestTrue(TEXT("Terrain footprint is an area"), Graph->Geometry.IsArea(Terrain.Geometry));
+            TestEqual(TEXT("Terrain footprint is a quad"),
+                Graph->Geometry.GetOuterRing(Terrain.Geometry).Num(), 4);
+
+            TestTrue(TEXT("Terrain records an elevation range"),
+                Terrain.Metrics.MaxElevationMeters > Terrain.Metrics.MinElevationMeters);
+            TestTrue(TEXT("Terrain records its raster size"),
+                Terrain.Tags.Contains(TEXT("osmworldgen:dem_width")));
+            TestTrue(TEXT("Terrain records where the raster came from"),
+                Terrain.Tags.Contains(TEXT("osmworldgen:dem_path")));
+
+            // The DEM is fetched with a margin so it fully covers the region after grid
+            // snapping. That makes its footprint legitimately larger than the region, and the
+            // outside-region check must not treat it as a clipping failure.
+            TestFalse(TEXT("Terrain does not trip the outside-region check"),
+                Report.Validation.HasCode(TEXT("graph.geometry.outsideregion")));
+            TestFalse(TEXT("Terrain is not flagged as outside the region"),
+                Terrain.ValidationFlags.Contains(TEXT("node.geometry.outsideregion")));
+        }
+    }
+
+    // ---- Without a DEM: no terrain node, and no pretending there is one ----
+    {
+        FOSMGraphBuildOptions Options;   // DEMFilePath deliberately empty
+
+        FOSMGraphReport Report;
+        UOSMCityGraph* Graph = FOSMGraphBuilder::Build(
+            Features, Region, Options, GetTransientPackage(), Report);
+
+        if (Graph)
+        {
+            TestEqual(TEXT("No DEM means no terrain node"),
+                Graph->CountNodesOfType(EOSMNodeType::TerrainTile), 0);
+            TestTrue(TEXT("A graph without terrain is still accepted"), Report.IsAccepted());
+        }
+    }
 
     return true;
 }

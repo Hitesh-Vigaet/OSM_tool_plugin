@@ -37,6 +37,16 @@ struct OSMWORLDGENCORE_API FOSMGraphBuildOptions
 
     /** Group road segments sharing a name into Corridor groups. */
     bool bBuildCorridors = true;
+
+    /**
+     * Elevation raster to build a TerrainTile node from. Empty means no terrain node.
+     *
+     * The graph is meant to be the complete description of the region, and elevation is part of
+     * that description. Reaching around it to the DEM file works for looking at, but it is the
+     * wrong shape for anything that consumes the graph — every such consumer would need to know
+     * where the raster lives and how to read it.
+     */
+    FString DEMFilePath;
 };
 
 /**
@@ -106,6 +116,9 @@ public:
     // ---- Stages, exposed for testing ----
 
     static void BuildNodes(const FOSMFeatureTable& Features, UOSMCityGraph& Graph, FOSMGraphReport& Report);
+
+    /** Create the TerrainTile node from the DEM, if one was supplied. */
+    static void BuildTerrain(UOSMCityGraph& Graph, const FOSMGraphBuildOptions& Options, FOSMGraphReport& Report);
     static void BuildTopology(UOSMCityGraph& Graph, FOSMGraphReport& Report);
     static void BuildSpatial(UOSMCityGraph& Graph, const FOSMGraphBuildOptions& Options, FOSMGraphReport& Report);
     static void BuildGroups(UOSMCityGraph& Graph, const FOSMGraphBuildOptions& Options, FOSMGraphReport& Report);

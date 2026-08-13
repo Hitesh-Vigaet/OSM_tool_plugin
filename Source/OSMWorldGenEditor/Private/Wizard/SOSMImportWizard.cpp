@@ -1140,6 +1140,11 @@ FReply SOSMImportWizard::OnStartGeneration()
 
         FOSMGraphBuildOptions GraphOptions;
 
+        // Elevation enters the graph here rather than being read around it later, so every
+        // consumer sees one description of the region instead of needing to know where the
+        // raster lives.
+        GraphOptions.DEMFilePath = State.DEMFilePath;
+
         UOSMCityGraph* Graph = FOSMGraphBuilder::Build(
             FeatureTable, State.Region, GraphOptions, GetTransientPackage(), State.GraphReport);
 
