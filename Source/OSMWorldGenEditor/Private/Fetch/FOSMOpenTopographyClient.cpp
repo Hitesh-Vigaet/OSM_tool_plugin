@@ -9,13 +9,13 @@
 #include "Misc/Paths.h"
 
 void FOSMOpenTopographyClient::FetchAsync(
-    const FOSMRegionCache::FBoundingBox& Bbox,
+    const FOSMRegion& Region,
     const FString& OutputFilePath,
     FOnFetchComplete OnComplete)
 {
-    if (!Bbox.IsValid())
+    if (!Region.IsValid())
     {
-        OnComplete.ExecuteIfBound(false, TEXT("OpenTopography fetch: invalid bounding box."));
+        OnComplete.ExecuteIfBound(false, TEXT("OpenTopography fetch: no valid region was supplied."));
         return;
     }
 
@@ -28,27 +28,21 @@ void FOSMOpenTopographyClient::FetchAsync(
         return;
     }
 
-    // OpenTopography does not crop to arbitrary coordinates — it returns whole source-grid
-    // cells, so the raster it hands back snaps to the DEM grid and can land a fraction of a
-    // cell *inside* the requested box, leaving the region's south/east edges uncovered.
+    // Ask for a slightly larger box than the region so the raster still fully contains it after
+    // OpenTopography snaps the request to its source grid. See FetchPaddingDegrees for why the
+    // margin is fixed rather than proportional.
     //
-    // Ask for a slightly larger box so the result always fully contains the region after
-    // snapping. This is a fixed margin rather than a percentage because the shortfall is
-    // caused by grid quantisation, so it is at most one cell regardless of region size — a
-    // percentage would over-fetch badly on large regions to solve a ~90m problem.
-    // 0.002 deg (~220m) exceeds one cell for any global DEM (SRTMGL1 ~30m, SRTMGL3 ~90m).
-    //
-    // The padding deliberately stays local to this URL: the caller's Bbox still defines the
-    // region identity (and the cache filename). Nothing downstream is affected, because the
-    // GeoTIFF is self-describing — FOSMDEMSampler resolves lat/lon through the file's own
-    // GeoTransform, so a padded raster maps the same coordinate to the same ground point,
-    // just at a different pixel index.
-    constexpr double DEMFetchPaddingDegrees = 0.002;
+    // The padding deliberately stays local to this URL: the caller's Region still defines the
+    // region identity (and the cache key). Nothing downstream is affected, because the GeoTIFF
+    // is self-describing — FOSMDEMSampler resolves lat/lon through the file's own GeoTransform,
+    // so a padded raster maps the same coordinate to the same ground point, just at a different
+    // pixel index.
+    const FOSMRegion PaddedRegion = Region.Expanded(FetchPaddingDegrees);
 
-    const double PaddedSouth = FMath::Max(Bbox.MinLat - DEMFetchPaddingDegrees, -90.0);
-    const double PaddedNorth = FMath::Min(Bbox.MaxLat + DEMFetchPaddingDegrees,  90.0);
-    const double PaddedWest  = FMath::Max(Bbox.MinLon - DEMFetchPaddingDegrees, -180.0);
-    const double PaddedEast  = FMath::Min(Bbox.MaxLon + DEMFetchPaddingDegrees,  180.0);
+    const double PaddedSouth = PaddedRegion.GetMinLat();
+    const double PaddedNorth = PaddedRegion.GetMaxLat();
+    const double PaddedWest  = PaddedRegion.GetMinLon();
+    const double PaddedEast  = PaddedRegion.GetMaxLon();
 
     const FString URL = FString::Printf(
         TEXT("https://portal.opentopography.org/API/globaldem?demtype=%s&south=%.7f&north=%.7f&west=%.7f&east=%.7f&outputFormat=GTiff&API_Key=%s"),

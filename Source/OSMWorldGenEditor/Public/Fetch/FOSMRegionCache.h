@@ -3,47 +3,99 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Region/FOSMRegion.h"
 
 /**
- * Resolves and manages the on-disk cache of auto-fetched region files
- * (plan_v2_workflow.md §4.2). Keyed by bounding box so re-selecting the same region
- * reuses previously fetched files instead of re-querying Overpass / OpenTopography.
+ * Records the exact terms a cached region was fetched under (plan_v3_pipeline.md Phase 1.2).
  *
- * Cache lives in Saved/OSMWorldGen/RegionCache/<bbox-hash>/ — local-only, per-machine,
+ * Without this, the cache key was the bounding box alone — so changing the DEM dataset or the
+ * fetch padding left every previously-fetched region silently serving files obtained under the
+ * old terms. You would change a setting, re-run, and see the identical result, with nothing
+ * anywhere indicating why.
+ *
+ * The manifest makes the terms explicit and comparable, so reuse becomes a decision the code
+ * can justify rather than an assumption.
+ */
+struct OSMWORLDGENEDITOR_API FOSMCacheManifest
+{
+    /** Bounds the files were fetched for. */
+    double MinLat = 0.0;
+    double MaxLat = 0.0;
+    double MinLon = 0.0;
+    double MaxLon = 0.0;
+
+    /** Endpoint that served the .osm (mirrors differ in completeness, so this is worth keeping). */
+    FString OverpassUrl;
+
+    /** OpenTopography dataset id, e.g. "SRTMGL1". */
+    FString DEMType;
+
+    /** Degrees of padding added to the DEM request beyond the region. */
+    double DEMPaddingDegrees = 0.0;
+
+    /** When the fetch completed (UTC). */
+    FDateTime FetchedAtUtc = FDateTime::MinValue();
+
+    /** Sizes as written, to detect a file truncated or replaced after the fetch. */
+    int64 OSMFileSize = 0;
+    int64 DEMFileSize = 0;
+
+    /** Verdict recorded by the import gates the last time these files were validated. */
+    FString LastValidationVerdict;
+
+    /** Plugin schema version, so a future format change can invalidate old manifests. */
+    int32 Version = 1;
+
+    bool SaveToFile(const FString& FilePath) const;
+    static bool LoadFromFile(const FString& FilePath, FOSMCacheManifest& OutManifest);
+
+    /**
+     * True if files described by this manifest may be reused for a fetch under the given terms.
+     * Any difference in dataset or padding means the cached DEM is not what would be fetched now.
+     */
+    bool MatchesFetchTerms(const FString& InDEMType, double InDEMPaddingDegrees) const;
+};
+
+/**
+ * Resolves and manages the on-disk cache of auto-fetched region files.
+ *
+ * Cache lives in Saved/OSMWorldGen/RegionCache/<region-hash>/ — local-only, per-machine,
  * consistent with how the engine already treats Saved/.
  */
 class OSMWORLDGENEDITOR_API FOSMRegionCache
 {
 public:
-    /** A geographic bounding box, in WGS84 degrees. */
-    struct FBoundingBox
-    {
-        double MinLat = 0.0;
-        double MaxLat = 0.0;
-        double MinLon = 0.0;
-        double MaxLon = 0.0;
+    /** Deterministic cache key for a region (the same region always hashes the same). */
+    static FString MakeRegionHash(const FOSMRegion& Region);
 
-        bool IsValid() const { return MaxLat > MinLat && MaxLon > MinLon; }
-    };
+    /** Absolute path to the cache directory for this region (may not exist yet). */
+    static FString GetCacheDir(const FOSMRegion& Region);
 
-    /** Deterministic cache key for a bounding box (same bbox always hashes the same). */
-    static FString MakeBboxHash(const FBoundingBox& Bbox);
+    /** Absolute path the fetched .osm file for this region should be read from / written to. */
+    static FString GetOSMFilePath(const FOSMRegion& Region);
 
-    /** Absolute path to the cache directory for this bbox (may not exist yet). */
-    static FString GetCacheDir(const FBoundingBox& Bbox);
+    /** Absolute path the fetched DEM (.tif) file for this region should be read from / written to. */
+    static FString GetDEMFilePath(const FOSMRegion& Region);
 
-    /** Absolute path the fetched .osm file for this bbox should be read from / written to. */
-    static FString GetOSMFilePath(const FBoundingBox& Bbox);
+    /** Absolute path to this region's cache manifest. */
+    static FString GetManifestFilePath(const FOSMRegion& Region);
 
-    /** Absolute path the fetched DEM (.tif) file for this bbox should be read from / written to. */
-    static FString GetDEMFilePath(const FBoundingBox& Bbox);
+    /**
+     * True if a cached .osm exists for this region AND was fetched under terms still in force.
+     * A cached file with no manifest is treated as unusable: it predates provenance tracking,
+     * so there is no way to know what it actually contains.
+     */
+    static bool HasValidCachedOSM(const FOSMRegion& Region, const FString& DEMType, double DEMPaddingDegrees);
 
-    /** True if a cached .osm file already exists for this bbox. */
-    static bool HasCachedOSM(const FBoundingBox& Bbox);
+    /** As HasValidCachedOSM, for the elevation raster. */
+    static bool HasValidCachedDEM(const FOSMRegion& Region, const FString& DEMType, double DEMPaddingDegrees);
 
-    /** True if a cached DEM file already exists for this bbox. */
-    static bool HasCachedDEM(const FBoundingBox& Bbox);
+    /** Reads this region's manifest, if one exists. */
+    static bool LoadManifest(const FOSMRegion& Region, FOSMCacheManifest& OutManifest);
 
-    /** Deletes any cached files for this bbox, forcing the next fetch to hit the network. */
-    static void InvalidateCache(const FBoundingBox& Bbox);
+    /** Writes the manifest for this region, creating the cache directory if needed. */
+    static bool SaveManifest(const FOSMRegion& Region, const FOSMCacheManifest& Manifest);
+
+    /** Deletes any cached files for this region, forcing the next fetch to hit the network. */
+    static void InvalidateCache(const FOSMRegion& Region);
 };

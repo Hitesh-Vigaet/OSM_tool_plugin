@@ -272,68 +272,77 @@ bool FOSMGeoTIFFReader::LoadHGT(const FString& FilePath, FOSMGeoTIFFTile& OutTil
 }
 
 // ---------------------------------------------------------------------------
-// Minimal TIFF IFD Parser (no compression, single band, 16-bit int or 32-bit float)
-// ---------------------------------------------------------------------------
-bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTile, TArray<float>& OutHeightData)
+int32 FOSMGeoTIFFHeader::GetTileCount() const
 {
-    TArray<uint8> Data;
-    if (!FFileHelper::LoadFileToArray(Data, *FilePath))
-    {
-        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: failed to read '%s'"), *FilePath);
-        return false;
-    }
+    if (!IsTiled()) return 1;
+    const int32 TilesAcross = FMath::DivideAndRoundUp(Width, static_cast<int32>(TileWidth));
+    const int32 TilesDown   = FMath::DivideAndRoundUp(Height, static_cast<int32>(TileLength));
+    return FMath::Max(1, TilesAcross * TilesDown);
+}
+
+// ---------------------------------------------------------------------------
+// Minimal TIFF IFD parser. Reads tags only — no raster data — so it is safe and cheap to run
+// as a pre-flight validation check on any file.
+// ---------------------------------------------------------------------------
+bool FOSMGeoTIFFReader::ReadHeader(
+    const TArray<uint8>& Data,
+    const FString& FilePath,
+    FOSMGeoTIFFHeader& OutHeader,
+    FString& OutError)
+{
+    OutHeader = FOSMGeoTIFFHeader();
 
     if (Data.Num() < 8)
     {
-        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: file too small '%s'"), *FilePath);
+        OutError = FString::Printf(
+            TEXT("file is %d bytes, too small to contain a TIFF header: '%s'"), Data.Num(), *FilePath);
         return false;
     }
 
     const uint8* Buf = Data.GetData();
 
-    // Byte order
     const uint16 ByteOrder = *reinterpret_cast<const uint16*>(Buf);
-    const bool bBE = (ByteOrder == TIFFConst::TIFF_BIGENDIAN);
     if (ByteOrder != TIFFConst::TIFF_LITTLEENDIAN && ByteOrder != TIFFConst::TIFF_BIGENDIAN)
     {
-        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: unrecognised byte-order 0x%04X in '%s'"), ByteOrder, *FilePath);
+        OutError = FString::Printf(
+            TEXT("unrecognised byte-order marker 0x%04X (expected 'II' or 'MM') in '%s'"), ByteOrder, *FilePath);
         return false;
     }
+    const bool bBE = (ByteOrder == TIFFConst::TIFF_BIGENDIAN);
+    OutHeader.bBigEndian = bBE;
 
-    // Magic
     const uint16 Magic = ReadValue<uint16>(Buf + 2, bBE);
     if (Magic != 42)
     {
-        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: not a valid TIFF (magic=%d) '%s'"), Magic, *FilePath);
+        OutError = FString::Printf(
+            TEXT("not a valid TIFF: magic number is %d, expected 42, in '%s'"), Magic, *FilePath);
         return false;
     }
 
-    // IFD offset
     uint32 IFDOffset = ReadValue<uint32>(Buf + 4, bBE);
 
-    // ---- Parse IFD tags ----
-    struct TIFFTagEntry { uint16 Tag; uint16 Type; uint32 Count; uint32 ValueOffset; };
-    // TIFF types: 1=BYTE, 2=ASCII, 3=SHORT, 4=LONG, 5=RATIONAL(2×LONG), 12=DOUBLE
+    if (IFDOffset + 2 > (uint32)Data.Num())
+    {
+        OutError = FString::Printf(
+            TEXT("image file directory offset %u lies past the end of the %d-byte file '%s' — ")
+            TEXT("the file is truncated"),
+            IFDOffset, Data.Num(), *FilePath);
+        return false;
+    }
 
-    int32  Width = 0, Height = 0;
-    uint16 BitsPerSample = 16, SampleFormat = TIFFConst::SAMPLEFORMAT_INT;
-    uint32 StripOffset = 0, RowsPerStrip = 0, StripByteCount = 0;
-    uint32 SamplesPerPixel = 1;
-    uint16 Compression = TIFFConst::COMPRESSION_NONE;
-    uint16 Predictor = 1;
-    uint32 TileWidth = 0, TileLength = 0, TileOffset = 0, TileByteCount = 0;
-    double PixelScaleX = 0, PixelScaleY = 0;
-    double TiepointX = 0, TiepointY = 0, TiepointLon = 0, TiepointLat = 0;
-    bool   bHasModelPixelScale = false, bHasModelTiepoint = false;
-    FString NoDataStr;
-
-    if (IFDOffset + 2 > (uint32)Data.Num()) return false;
     const uint16 NumEntries = ReadValue<uint16>(Buf + IFDOffset, bBE);
     IFDOffset += 2;
 
+    // TIFF types: 1=BYTE, 2=ASCII, 3=SHORT, 4=LONG, 5=RATIONAL(2xLONG), 12=DOUBLE
     for (uint16 e = 0; e < NumEntries; ++e)
     {
-        if (IFDOffset + 12 > (uint32)Data.Num()) break;
+        if (IFDOffset + 12 > (uint32)Data.Num())
+        {
+            OutError = FString::Printf(
+                TEXT("image file directory claims %d entries but the file ends after %d of them: '%s'"),
+                NumEntries, e, *FilePath);
+            return false;
+        }
 
         const uint16 Tag   = ReadValue<uint16>(Buf + IFDOffset + 0, bBE);
         const uint16 Type  = ReadValue<uint16>(Buf + IFDOffset + 2, bBE);
@@ -354,62 +363,131 @@ bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTi
 
         switch (Tag)
         {
-        case TIFFConst::TAG_ImageWidth:        Width          = (Type == 3) ? GetShort() : GetLong(); break;
-        case TIFFConst::TAG_ImageLength:       Height         = (Type == 3) ? GetShort() : GetLong(); break;
-        case TIFFConst::TAG_BitsPerSample:     BitsPerSample  = GetShort(); break;
-        case TIFFConst::TAG_SamplesPerPixel:   SamplesPerPixel = GetShort(); break;
-        case TIFFConst::TAG_SampleFormat:      SampleFormat   = GetShort(); break;
-        case TIFFConst::TAG_StripOffsets:      StripOffset    = GetLong();  break;
-        case TIFFConst::TAG_RowsPerStrip:      RowsPerStrip   = GetLong();  break;
-        case TIFFConst::TAG_StripByteCounts:   StripByteCount = GetLong();  break;
-        case TIFFConst::TAG_Compression:       Compression    = GetShort(); break;
-        case TIFFConst::TAG_Predictor:         Predictor      = GetShort(); break;
-        case TIFFConst::TAG_TileWidth:         TileWidth      = (Type == 3) ? GetShort() : GetLong(); break;
-        case TIFFConst::TAG_TileLength:        TileLength     = (Type == 3) ? GetShort() : GetLong(); break;
-        case TIFFConst::TAG_TileOffsets:       TileOffset     = GetLong();  break;
-        case TIFFConst::TAG_TileByteCounts:    TileByteCount  = GetLong();  break;
+        case TIFFConst::TAG_ImageWidth:        OutHeader.Width           = (Type == 3) ? GetShort() : GetLong(); break;
+        case TIFFConst::TAG_ImageLength:       OutHeader.Height          = (Type == 3) ? GetShort() : GetLong(); break;
+        case TIFFConst::TAG_BitsPerSample:     OutHeader.BitsPerSample   = GetShort(); break;
+        case TIFFConst::TAG_SamplesPerPixel:   OutHeader.SamplesPerPixel = GetShort(); break;
+        case TIFFConst::TAG_SampleFormat:      OutHeader.SampleFormat    = GetShort(); break;
+        case TIFFConst::TAG_StripOffsets:      OutHeader.StripOffset     = GetLong();  break;
+        case TIFFConst::TAG_RowsPerStrip:      OutHeader.RowsPerStrip    = GetLong();  break;
+        case TIFFConst::TAG_StripByteCounts:   OutHeader.StripByteCount  = GetLong();  break;
+        case TIFFConst::TAG_Compression:       OutHeader.Compression     = GetShort(); break;
+        case TIFFConst::TAG_Predictor:         OutHeader.Predictor       = GetShort(); break;
+        case TIFFConst::TAG_TileWidth:         OutHeader.TileWidth       = (Type == 3) ? GetShort() : GetLong(); break;
+        case TIFFConst::TAG_TileLength:        OutHeader.TileLength      = (Type == 3) ? GetShort() : GetLong(); break;
+        case TIFFConst::TAG_TileOffsets:       OutHeader.TileOffset      = GetLong();  break;
+        case TIFFConst::TAG_TileByteCounts:    OutHeader.TileByteCount   = GetLong();  break;
         case TIFFConst::TAG_ModelPixelScaleTag:
             if (Count >= 3)
             {
-                PixelScaleX = GetDoubleAt(VOrO + 0);
-                PixelScaleY = GetDoubleAt(VOrO + 8);
-                bHasModelPixelScale = true;
+                OutHeader.PixelScaleX = GetDoubleAt(VOrO + 0);
+                OutHeader.PixelScaleY = GetDoubleAt(VOrO + 8);
+                OutHeader.bHasModelPixelScale = true;
             }
             break;
         case TIFFConst::TAG_ModelTiepointTag:
             if (Count >= 6)
             {
-                TiepointX   = GetDoubleAt(VOrO + 0);
-                TiepointY   = GetDoubleAt(VOrO + 8);
+                OutHeader.TiepointX   = GetDoubleAt(VOrO + 0);
+                OutHeader.TiepointY   = GetDoubleAt(VOrO + 8);
                 // skip Z
-                TiepointLon = GetDoubleAt(VOrO + 24);
-                TiepointLat = GetDoubleAt(VOrO + 32);
-                bHasModelTiepoint = true;
+                OutHeader.TiepointLon = GetDoubleAt(VOrO + 24);
+                OutHeader.TiepointLat = GetDoubleAt(VOrO + 32);
+                OutHeader.bHasModelTiepoint = true;
             }
             break;
         case TIFFConst::TAG_GDAL_NODATA:
             {
-                // ASCII string
-                uint32 StrLen = FMath::Min(Count, 64u);
+                // ASCII string, stored inline when it fits in the 4-byte value field.
+                const uint32 StrLen = FMath::Min(Count, 64u);
+                const bool bInline = (Count <= 4);
                 FString Tmp;
                 for (uint32 ci = 0; ci < StrLen; ++ci)
                 {
-                    char Ch = (char)((VOrO > 4 || Count > 4) ? Buf[VOrO + ci] : ((VOrO >> (8 * ci)) & 0xFF));
+                    char Ch;
+                    if (bInline)
+                    {
+                        Ch = (char)((VOrO >> (8 * ci)) & 0xFF);
+                    }
+                    else
+                    {
+                        if (VOrO + ci >= (uint32)Data.Num()) break;
+                        Ch = (char)Buf[VOrO + ci];
+                    }
                     if (Ch == 0) break;
                     Tmp.AppendChar(Ch);
                 }
-                NoDataStr = Tmp;
+                OutHeader.NoDataStr = Tmp;
             }
             break;
         default: break;
         }
     }
 
-    if (Width <= 0 || Height <= 0)
+    if (OutHeader.Width <= 0 || OutHeader.Height <= 0)
     {
-        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: invalid dimensions %dx%d in '%s'"), Width, Height, *FilePath);
+        OutError = FString::Printf(
+            TEXT("invalid raster dimensions %dx%d in '%s'"), OutHeader.Width, OutHeader.Height, *FilePath);
         return false;
     }
+
+    OutError.Empty();
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Minimal TIFF IFD Parser (no compression, single band, 16-bit int or 32-bit float)
+// ---------------------------------------------------------------------------
+bool FOSMGeoTIFFReader::LoadTIFF(const FString& FilePath, FOSMGeoTIFFTile& OutTile, TArray<float>& OutHeightData)
+{
+    TArray<uint8> Data;
+    if (!FFileHelper::LoadFileToArray(Data, *FilePath))
+    {
+        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: failed to read '%s'"), *FilePath);
+        return false;
+    }
+
+    if (Data.Num() < 8)
+    {
+        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: file too small '%s'"), *FilePath);
+        return false;
+    }
+
+    const uint8* Buf = Data.GetData();
+
+    // Header and IFD parsing lives in ReadHeader so the validation gate inspects files through
+    // exactly this code path rather than a second, divergent TIFF parser.
+    FOSMGeoTIFFHeader Header;
+    FString HeaderError;
+    if (!ReadHeader(Data, FilePath, Header, HeaderError))
+    {
+        UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: %s"), *HeaderError);
+        return false;
+    }
+
+    const bool   bBE             = Header.bBigEndian;
+    const int32  Width           = Header.Width;
+    const int32  Height          = Header.Height;
+    const uint16 BitsPerSample   = Header.BitsPerSample;
+    const uint16 SampleFormat    = Header.SampleFormat;
+    const uint32 StripOffset     = Header.StripOffset;
+    const uint32 StripByteCount  = Header.StripByteCount;
+    const uint16 Compression     = Header.Compression;
+    const uint16 Predictor       = Header.Predictor;
+    const uint32 TileWidth       = Header.TileWidth;
+    const uint32 TileLength      = Header.TileLength;
+    const uint32 TileOffset      = Header.TileOffset;
+    const uint32 TileByteCount   = Header.TileByteCount;
+    const double PixelScaleX     = Header.PixelScaleX;
+    const double PixelScaleY     = Header.PixelScaleY;
+    const double TiepointX       = Header.TiepointX;
+    const double TiepointY       = Header.TiepointY;
+    const double TiepointLon     = Header.TiepointLon;
+    const double TiepointLat     = Header.TiepointLat;
+    const bool   bHasModelPixelScale = Header.bHasModelPixelScale;
+    const bool   bHasModelTiepoint   = Header.bHasModelTiepoint;
+    const FString& NoDataStr     = Header.NoDataStr;
+
     if (BitsPerSample != 16 && BitsPerSample != 32)
     {
         UE_LOG(LogOSMWorldGen, Error, TEXT("TIFF Load: unsupported bits-per-sample=%d in '%s'"), BitsPerSample, *FilePath);

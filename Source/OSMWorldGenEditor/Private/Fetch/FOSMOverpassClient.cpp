@@ -25,6 +25,9 @@ namespace
     };
     static constexpr int32 GNumOverpassMirrors = UE_ARRAY_COUNT(GOverpassMirrors);
 
+    /** Set on each successful fetch; surfaced via GetLastSuccessfulEndpoint() for the manifest. */
+    FString GLastSuccessfulEndpoint;
+
     void DoFetch(const FString& Query, const FString& Url, float TimeoutSeconds, const FString& OutputFilePath,
         FOSMOverpassClient::FOnFetchComplete OnComplete, int32 NextMirrorIndex);
 
@@ -55,7 +58,7 @@ namespace
         Request->SetTimeout(TimeoutSeconds);
 
         Request->OnProcessRequestComplete().BindLambda(
-            [Query, TimeoutSeconds, OutputFilePath, OnComplete, NextMirrorIndex](FHttpRequestPtr /*Req*/, FHttpResponsePtr Response, bool bConnectedSuccessfully)
+            [Query, Url, TimeoutSeconds, OutputFilePath, OnComplete, NextMirrorIndex](FHttpRequestPtr /*Req*/, FHttpResponsePtr Response, bool bConnectedSuccessfully)
             {
                 const bool bFailed = !bConnectedSuccessfully || !Response.IsValid() || Response->GetResponseCode() != 200;
                 if (bFailed)
@@ -92,6 +95,7 @@ namespace
                     return;
                 }
 
+                GLastSuccessfulEndpoint = Url;
                 OnComplete.ExecuteIfBound(true, FString());
             });
 
@@ -99,7 +103,7 @@ namespace
     }
 }
 
-FString FOSMOverpassClient::BuildQuery(const FOSMRegionCache::FBoundingBox& Bbox, float TimeoutSeconds)
+FString FOSMOverpassClient::BuildQuery(const FOSMRegion& Region, float TimeoutSeconds)
 {
     // Fetch every node/way/relation in the bbox, then recurse (`>`) to pull in nodes
     // referenced by ways/relations that cross the boundary — this produces a file
@@ -123,19 +127,19 @@ FString FOSMOverpassClient::BuildQuery(const FOSMRegionCache::FBoundingBox& Bbox
         TEXT("(._;>;);\n")
         TEXT("out meta;\n"),
         FMath::Max(10, FMath::RoundToInt(TimeoutSeconds)),
-        Bbox.MinLat, Bbox.MinLon, Bbox.MaxLat, Bbox.MaxLon,
-        Bbox.MinLat, Bbox.MinLon, Bbox.MaxLat, Bbox.MaxLon,
-        Bbox.MinLat, Bbox.MinLon, Bbox.MaxLat, Bbox.MaxLon);
+        Region.GetMinLat(), Region.GetMinLon(), Region.GetMaxLat(), Region.GetMaxLon(),
+        Region.GetMinLat(), Region.GetMinLon(), Region.GetMaxLat(), Region.GetMaxLon(),
+        Region.GetMinLat(), Region.GetMinLon(), Region.GetMaxLat(), Region.GetMaxLon());
 }
 
 void FOSMOverpassClient::FetchAsync(
-    const FOSMRegionCache::FBoundingBox& Bbox,
+    const FOSMRegion& Region,
     const FString& OutputFilePath,
     FOnFetchComplete OnComplete)
 {
-    if (!Bbox.IsValid())
+    if (!Region.IsValid())
     {
-        OnComplete.ExecuteIfBound(false, TEXT("Overpass fetch: invalid bounding box."));
+        OnComplete.ExecuteIfBound(false, TEXT("Overpass fetch: no valid region was supplied."));
         return;
     }
 
@@ -144,8 +148,13 @@ void FOSMOverpassClient::FetchAsync(
     // Public Overpass instances are slow under load; 30 s was not enough for a dense urban
     // bbox and produced connection timeouts rather than a real answer.
     const float TimeoutSeconds = FMath::Max(90.0f, Settings->RequestTimeoutSeconds);
-    const FString Query = BuildQuery(Bbox, TimeoutSeconds);
+    const FString Query = BuildQuery(Region, TimeoutSeconds);
 
     // Start at the configured URL, then work through the mirror list on failure.
     DoFetch(Query, Settings->OverpassApiUrl, TimeoutSeconds, OutputFilePath, OnComplete, /*NextMirrorIndex=*/0);
+}
+
+const FString& FOSMOverpassClient::GetLastSuccessfulEndpoint()
+{
+    return GLastSuccessfulEndpoint;
 }

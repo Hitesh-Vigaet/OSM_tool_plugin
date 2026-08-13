@@ -21,11 +21,25 @@ public:
     DECLARE_DELEGATE_TwoParams(FOnFetchComplete, bool /*bSuccess*/, const FString& /*ErrorMessage*/);
 
     /**
-     * Fetch DEM coverage for Bbox and write it to OutputFilePath as GeoTIFF.
+     * Margin in degrees added to the requested region when asking OpenTopography for a raster.
+     *
+     * OpenTopography returns whole source-grid cells rather than cropping to the requested
+     * coordinates, so an unpadded request yields a raster that snaps a fraction of a cell
+     * *inside* the region and leaves its edges uncovered. 0.002 deg (~220 m) exceeds one cell
+     * for any global DEM (SRTMGL1 ~30 m, SRTMGL3 ~90 m).
+     *
+     * Public because the cache manifest records it: a change here must invalidate every
+     * previously fetched DEM, and that can only happen if the value is comparable.
+     */
+    static constexpr double FetchPaddingDegrees = 0.002;
+
+    /**
+     * Fetch DEM coverage for Region and write it to OutputFilePath as GeoTIFF.
+     * The request is padded by FetchPaddingDegrees; the region itself is unchanged.
      * Async — OnComplete fires on the game thread once the HTTP request resolves.
      */
     static void FetchAsync(
-        const FOSMRegionCache::FBoundingBox& Bbox,
+        const FOSMRegion& Region,
         const FString& OutputFilePath,
         FOnFetchComplete OnComplete);
 };

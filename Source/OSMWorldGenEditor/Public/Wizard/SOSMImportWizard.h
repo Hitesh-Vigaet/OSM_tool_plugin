@@ -8,6 +8,8 @@
 #include "CRS/FOSMGeoOrigin.h"
 #include "CRS/EOSMProjectionMode.h"
 #include "Fetch/FOSMNominatimClient.h"
+#include "Region/FOSMRegion.h"
+#include "Validation/FOSMImportReport.h"
 
 class SWidget;
 
@@ -19,8 +21,8 @@ class SWidget;
  * safety limit — beyond that a Landscape starts exceeding the renderer's float precision
  * budget, and dense urban bboxes also start timing out on the public Overpass servers.
  */
-static constexpr double GOSMMaxRegionAreaSqKm = 25.0;
-static constexpr double GOSMMinRegionAreaSqKm = 0.05;
+static constexpr double GOSMMaxRegionAreaSqKm = OSMRegionLimits::MaxAreaSqKm;
+static constexpr double GOSMMinRegionAreaSqKm = OSMRegionLimits::MinAreaSqKm;
 
 /**
  * 5-Step Editor Import Wizard for OSMWorldGen.
@@ -51,8 +53,17 @@ public:
         /** Raw text of the area box, kept separately so a half-typed value isn't clobbered. */
         FString AreaInputText = TEXT("1.0");
 
-        double FetchMinLat = 0.0, FetchMaxLat = 0.0;
-        double FetchMinLon = 0.0, FetchMaxLon = 0.0;
+        /**
+         * The region being imported — the single source of truth (plan_v3_pipeline.md 1.1).
+         *
+         * Every consumer reads this. Nothing recomputes a region from file geometry, from the
+         * scan preview below, or from anything else: doing so is what previously turned a
+         * 1.5 km request into a 500 km landscape.
+         */
+        FOSMRegion Region;
+
+        /** Editable text for the four bounds, so a half-typed coordinate isn't clobbered. */
+        FString BoundsText[4];
         FString PastedBboxRawText;
         FString PlaceSearchQuery;
         bool bIsSearchingPlace = false;
@@ -65,9 +76,13 @@ public:
         FString LastDEMFetchError;
         FText FetchStatusText;
 
-        // Bounding box computed from selected files
-        double MinLat = 0.0, MaxLat = 0.0;
-        double MinLon = 0.0, MaxLon = 0.0;
+        /**
+         * Extent observed by scanning manually-selected files, shown as a preview before import.
+         *
+         * Deliberately NOT a region: this is an observation about file contents, and reading it
+         * as the import target is precisely the confusion that Region above exists to prevent.
+         */
+        FOSMRegion ScanPreviewBounds;
         bool bHasValidExtents = false;
         bool bDEMOverlapsOSM = false;
 
@@ -97,6 +112,10 @@ public:
          * data was understood correctly.
          */
         FString ImportSummary;
+
+        /** Structured outcome of the last import run. Drives the summary step. */
+        FOSMImportReport ImportReport;
+        bool bHasImportReport = false;
     };
 
     /** Opens the wizard window in Unreal Editor */
@@ -134,6 +153,11 @@ private:
     bool GetCurrentRegionCenter(double& OutLat, double& OutLon) const;
     /** Re-parse the area box and reshape the bbox around its existing centre. */
     void OnAreaTextCommitted();
+
+    /** Rewrite the four editable bounds fields from the current region. */
+    void RefreshBoundsText();
+    /** Build a region from the typed bounds. Returns false and reports why on rejection. */
+    bool TrySetRegionFromBoundsText();
 
     FReply OnNextClicked();
     FReply OnPrevClicked();

@@ -18,15 +18,24 @@ public:
     DECLARE_DELEGATE_TwoParams(FOnFetchComplete, bool /*bSuccess*/, const FString& /*ErrorMessage*/);
 
     /**
-     * Fetch all nodes/ways/relations within Bbox and write them to OutputFilePath as OSM XML.
+     * Fetch all nodes/ways/relations within Region and write them to OutputFilePath as OSM XML.
      * Async — OnComplete fires on the game thread once the HTTP request resolves.
      */
     static void FetchAsync(
-        const FOSMRegionCache::FBoundingBox& Bbox,
+        const FOSMRegion& Region,
         const FString& OutputFilePath,
         FOnFetchComplete OnComplete);
 
+    /**
+     * Endpoint that served the most recent successful fetch.
+     *
+     * Recorded in the cache manifest: mirrors are not always equally complete or equally
+     * up to date, so "which server did this file come from" is worth knowing when a cached
+     * region turns out to be missing features.
+     */
+    static const FString& GetLastSuccessfulEndpoint();
+
 private:
     /** Build the Overpass QL query text for a bbox (fetch everything, resolve referenced nodes). */
-    static FString BuildQuery(const FOSMRegionCache::FBoundingBox& Bbox, float TimeoutSeconds);
+    static FString BuildQuery(const FOSMRegion& Region, float TimeoutSeconds);
 };

@@ -28,6 +28,7 @@
 #include "Fetch/FOSMRegionCache.h"
 #include "Fetch/FOSMOverpassClient.h"
 #include "Fetch/FOSMOpenTopographyClient.h"
+#include "Settings/UOSMWorldGenSettings.h"
 #include "HAL/PlatformProcess.h"
 #include "Widgets/SWindow.h"
 #include "Async/Async.h"
@@ -210,8 +211,10 @@ TSharedPtr<SWidget> SOSMImportWizard::ConstructStep0_FileSelect()
                     }
                     if (State.bHasValidExtents)
                     {
-                        return FText::FromString(FString::Printf(TEXT("Geographic Bounding Box Verified:\nLatitude Range: %.6f to %.6f\nLongitude Range: %.6f to %.6f\nDEM Status: %s"),
-                            State.MinLat, State.MaxLat, State.MinLon, State.MaxLon,
+                        return FText::FromString(FString::Printf(TEXT("File extent scanned (%s):\nLatitude Range: %.6f to %.6f\nLongitude Range: %.6f to %.6f\nDEM Status: %s"),
+                            State.Region.IsValid() ? TEXT("preview only — the fetched region is what gets imported") : TEXT("will be used as the import region"),
+                            State.ScanPreviewBounds.GetMinLat(), State.ScanPreviewBounds.GetMaxLat(),
+                            State.ScanPreviewBounds.GetMinLon(), State.ScanPreviewBounds.GetMaxLon(),
                             State.DEMFilePath.IsEmpty() ? TEXT("None (Flat Terrain Fallback)") : (State.bDEMOverlapsOSM ? TEXT("Overlaps OSM Bounding Box") : TEXT("Loaded"))));
                     }
                     return FText::FromString(TEXT("Analyzing file header extents..."));
@@ -316,8 +319,9 @@ TSharedPtr<SWidget> SOSMImportWizard::ConstructRegionFetchSection()
                     SNew(SBox).WidthOverride(90.0f)
                     [
                         SNew(SEditableTextBox)
-                        .Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("%.6f"), State.FetchMinLat)); })
-                        .OnTextChanged_Lambda([this](const FText& Text) { State.FetchMinLat = FCString::Atod(*Text.ToString()); })
+                        .Text_Lambda([this]() { return FText::FromString(State.BoundsText[0]); })
+                        .OnTextChanged_Lambda([this](const FText& Text) { State.BoundsText[0] = Text.ToString(); })
+                        .OnTextCommitted_Lambda([this](const FText&, ETextCommit::Type) { TrySetRegionFromBoundsText(); })
                     ]
                 ]
 
@@ -327,8 +331,9 @@ TSharedPtr<SWidget> SOSMImportWizard::ConstructRegionFetchSection()
                     SNew(SBox).WidthOverride(90.0f)
                     [
                         SNew(SEditableTextBox)
-                        .Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("%.6f"), State.FetchMaxLat)); })
-                        .OnTextChanged_Lambda([this](const FText& Text) { State.FetchMaxLat = FCString::Atod(*Text.ToString()); })
+                        .Text_Lambda([this]() { return FText::FromString(State.BoundsText[1]); })
+                        .OnTextChanged_Lambda([this](const FText& Text) { State.BoundsText[1] = Text.ToString(); })
+                        .OnTextCommitted_Lambda([this](const FText&, ETextCommit::Type) { TrySetRegionFromBoundsText(); })
                     ]
                 ]
 
@@ -338,8 +343,9 @@ TSharedPtr<SWidget> SOSMImportWizard::ConstructRegionFetchSection()
                     SNew(SBox).WidthOverride(90.0f)
                     [
                         SNew(SEditableTextBox)
-                        .Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("%.6f"), State.FetchMinLon)); })
-                        .OnTextChanged_Lambda([this](const FText& Text) { State.FetchMinLon = FCString::Atod(*Text.ToString()); })
+                        .Text_Lambda([this]() { return FText::FromString(State.BoundsText[2]); })
+                        .OnTextChanged_Lambda([this](const FText& Text) { State.BoundsText[2] = Text.ToString(); })
+                        .OnTextCommitted_Lambda([this](const FText&, ETextCommit::Type) { TrySetRegionFromBoundsText(); })
                     ]
                 ]
 
@@ -349,8 +355,9 @@ TSharedPtr<SWidget> SOSMImportWizard::ConstructRegionFetchSection()
                     SNew(SBox).WidthOverride(90.0f)
                     [
                         SNew(SEditableTextBox)
-                        .Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("%.6f"), State.FetchMaxLon)); })
-                        .OnTextChanged_Lambda([this](const FText& Text) { State.FetchMaxLon = FCString::Atod(*Text.ToString()); })
+                        .Text_Lambda([this]() { return FText::FromString(State.BoundsText[3]); })
+                        .OnTextChanged_Lambda([this](const FText& Text) { State.BoundsText[3] = Text.ToString(); })
+                        .OnTextCommitted_Lambda([this](const FText&, ETextCommit::Type) { TrySetRegionFromBoundsText(); })
                     ]
                 ]
             ]
@@ -602,48 +609,109 @@ void SOSMImportWizard::AnalyzeSelectedFiles()
     if (FOSMParser::Parse(State.OSMFilePath, TempResult))
     {
         TempResult.ResolveWayCoordinates();
-        State.MinLat = TempResult.MinLatLon.X;
-        State.MaxLat = TempResult.MaxLatLon.X;
-        State.MinLon = TempResult.MinLatLon.Y;
-        State.MaxLon = TempResult.MaxLatLon.Y;
-        State.bHasValidExtents = true;
 
-        // Set centroid origin
-        State.GeoOrigin.Latitude = (State.MinLat + State.MaxLat) * 0.5;
-        State.GeoOrigin.Longitude = (State.MinLon + State.MaxLon) * 0.5;
-        State.GeoOrigin.HeightMeters = 0.0;
-        State.bDEMOverlapsOSM = !State.DEMFilePath.IsEmpty();
+        // ObservedBounds, not FromBoundingBox: a scanned extent is a fact about the file, and
+        // is allowed to be far larger than any importable region (Overpass returns whole ways
+        // that merely cross the query box). Running it through the size-limited factory would
+        // reject perfectly good files.
+        FString Error;
+        if (FOSMRegion::ObservedBounds(
+                TempResult.MinLatLon.X, TempResult.MinLatLon.Y,
+                TempResult.MaxLatLon.X, TempResult.MaxLatLon.Y,
+                State.ScanPreviewBounds, Error))
+        {
+            State.bHasValidExtents = true;
+            State.bDEMOverlapsOSM = !State.DEMFilePath.IsEmpty();
+
+            // The origin follows the region when there is one. Only a manual file selection
+            // with no region falls back to the scanned centroid.
+            State.GeoOrigin = State.Region.IsValid()
+                ? State.Region.GetGeoOrigin()
+                : State.ScanPreviewBounds.GetGeoOrigin();
+        }
+        else
+        {
+            State.bHasValidExtents = false;
+            UE_LOG(LogTemp, Warning, TEXT("OSM scan: '%s' has no usable extent: %s"),
+                *State.OSMFilePath, *Error);
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
 bool SOSMImportWizard::GetCurrentRegionCenter(double& OutLat, double& OutLon) const
 {
-    if (State.FetchMaxLat > State.FetchMinLat && State.FetchMaxLon > State.FetchMinLon)
+    if (!State.Region.IsValid())
     {
-        OutLat = (State.FetchMinLat + State.FetchMaxLat) * 0.5;
-        OutLon = (State.FetchMinLon + State.FetchMaxLon) * 0.5;
-        return true;
+        return false;
     }
-    return false;
+    OutLat = State.Region.GetCenterLat();
+    OutLon = State.Region.GetCenterLon();
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+void SOSMImportWizard::RefreshBoundsText()
+{
+    if (!State.Region.IsValid())
+    {
+        for (FString& Text : State.BoundsText)
+        {
+            Text.Empty();
+        }
+        return;
+    }
+
+    State.BoundsText[0] = FString::Printf(TEXT("%.6f"), State.Region.GetMinLat());
+    State.BoundsText[1] = FString::Printf(TEXT("%.6f"), State.Region.GetMaxLat());
+    State.BoundsText[2] = FString::Printf(TEXT("%.6f"), State.Region.GetMinLon());
+    State.BoundsText[3] = FString::Printf(TEXT("%.6f"), State.Region.GetMaxLon());
+}
+
+// ---------------------------------------------------------------------------
+bool SOSMImportWizard::TrySetRegionFromBoundsText()
+{
+    const double MinLat = FCString::Atod(*State.BoundsText[0]);
+    const double MaxLat = FCString::Atod(*State.BoundsText[1]);
+    const double MinLon = FCString::Atod(*State.BoundsText[2]);
+    const double MaxLon = FCString::Atod(*State.BoundsText[3]);
+
+    FOSMRegion Candidate;
+    FString Error;
+    if (!FOSMRegion::FromBoundingBox(MinLat, MinLon, MaxLat, MaxLon, Candidate, Error))
+    {
+        // Typed bounds are rejected rather than partially applied: a region that only half
+        // took effect is exactly the kind of silent inconsistency this phase removes.
+        State.FetchStatusText = FText::FromString(Error);
+        return false;
+    }
+
+    State.Region = Candidate;
+    State.RequestedAreaSqKm = Candidate.GetAreaSqKm();
+    State.AreaInputText = FString::Printf(TEXT("%.2f"), State.RequestedAreaSqKm);
+    State.FetchStatusText = FText::FromString(FString::Printf(
+        TEXT("Region set: %.2f x %.2f km (%.2f km2)."),
+        Candidate.GetWidthKm(), Candidate.GetHeightKm(), Candidate.GetAreaSqKm()));
+    return true;
 }
 
 // ---------------------------------------------------------------------------
 void SOSMImportWizard::ApplyRequestedAreaAround(double CenterLat, double CenterLon)
 {
     const double AreaSqKm = FMath::Clamp(State.RequestedAreaSqKm, GOSMMinRegionAreaSqKm, GOSMMaxRegionAreaSqKm);
-    const double SideKm = FMath::Sqrt(AreaSqKm);
 
-    // A degree of latitude is ~111.32 km everywhere; a degree of longitude shrinks by
-    // cos(latitude), so the box has to be widened in longitude to stay square on the ground.
-    const double CosLat = FMath::Max(0.01, FMath::Cos(FMath::DegreesToRadians(CenterLat)));
-    const double HalfLatDeg = (SideKm * 0.5) / 111.32;
-    const double HalfLonDeg = (SideKm * 0.5) / (111.32 * CosLat);
+    // The degree maths lives in FOSMRegion, not here. Every place that used to derive a box
+    // from a centre had its own copy of the cos(latitude) conversion, and they disagreed.
+    FOSMRegion Candidate;
+    FString Error;
+    if (!FOSMRegion::FromCenterAndArea(CenterLat, CenterLon, AreaSqKm, Candidate, Error))
+    {
+        State.FetchStatusText = FText::FromString(Error);
+        return;
+    }
 
-    State.FetchMinLat = CenterLat - HalfLatDeg;
-    State.FetchMaxLat = CenterLat + HalfLatDeg;
-    State.FetchMinLon = CenterLon - HalfLonDeg;
-    State.FetchMaxLon = CenterLon + HalfLonDeg;
+    State.Region = Candidate;
+    RefreshBoundsText();
 }
 
 // ---------------------------------------------------------------------------
@@ -701,11 +769,24 @@ FReply SOSMImportWizard::OnParseBboxClicked()
     double MinLat = 0.0, MinLon = 0.0, MaxLat = 0.0, MaxLon = 0.0;
     if (ParseBboxFromText(State.PastedBboxRawText, MinLat, MinLon, MaxLat, MaxLon))
     {
-        State.FetchMinLat = MinLat;
-        State.FetchMinLon = MinLon;
-        State.FetchMaxLat = MaxLat;
-        State.FetchMaxLon = MaxLon;
-        State.FetchStatusText = FText::FromString(TEXT("Parsed bounding box from pasted text — fields updated below."));
+        FOSMRegion Candidate;
+        FString Error;
+        if (FOSMRegion::FromBoundingBox(MinLat, MinLon, MaxLat, MaxLon, Candidate, Error))
+        {
+            State.Region = Candidate;
+            State.RequestedAreaSqKm = Candidate.GetAreaSqKm();
+            State.AreaInputText = FString::Printf(TEXT("%.2f"), State.RequestedAreaSqKm);
+            RefreshBoundsText();
+            State.FetchStatusText = FText::FromString(FString::Printf(
+                TEXT("Parsed bounding box: %.2f x %.2f km (%.2f km2)."),
+                Candidate.GetWidthKm(), Candidate.GetHeightKm(), Candidate.GetAreaSqKm()));
+        }
+        else
+        {
+            // The paste was well-formed but describes an unusable region — say which, rather
+            // than silently accepting bounds that would fail later.
+            State.FetchStatusText = FText::FromString(Error);
+        }
     }
     else
     {
@@ -793,38 +874,27 @@ void SOSMImportWizard::OnGeocodeComplete(bool bSuccess, const FString& ErrorMess
 
 FReply SOSMImportWizard::OnFetchRegionClicked()
 {
-    FOSMRegionCache::FBoundingBox Bbox;
-    Bbox.MinLat = State.FetchMinLat;
-    Bbox.MaxLat = State.FetchMaxLat;
-    Bbox.MinLon = State.FetchMinLon;
-    Bbox.MaxLon = State.FetchMaxLon;
-
-    if (!Bbox.IsValid())
+    // Pick up any hand-edited bounds before fetching, so what is fetched is always what the
+    // fields show. TrySetRegionFromBoundsText reports its own reason on rejection.
+    if (State.BoundsText[0].Len() > 0 && !TrySetRegionFromBoundsText())
     {
-        State.FetchStatusText = FText::FromString(TEXT("Invalid bounding box — Max Lat/Lon must be greater than Min Lat/Lon."));
         return FReply::Handled();
     }
 
-    // Validate whatever box is actually about to be fetched. The area field derives the box,
-    // but the lat/lon fields stay hand-editable and a pasted bbox bypasses the area entirely,
-    // so the real measured extent is what gets checked here rather than the requested area.
-    // Equirectangular approximation, consistent with FOSMFeatureTable::GetApproxExtentKm.
-    const double MidLat = (Bbox.MinLat + Bbox.MaxLat) * 0.5;
-    const double LatKm = (Bbox.MaxLat - Bbox.MinLat) * 111.32;
-    const double LonKm = (Bbox.MaxLon - Bbox.MinLon) * 111.32 * FMath::Cos(FMath::DegreesToRadians(MidLat));
-    const double ActualAreaSqKm = LatKm * LonKm;
-
-    if (ActualAreaSqKm > GOSMMaxRegionAreaSqKm)
+    if (!State.Region.IsValid())
     {
-        State.FetchStatusText = FText::FromString(FString::Printf(
-            TEXT("Region is ~%.1f km² (%.1f × %.1f km), over the %.0f km² limit. Lower the area, or shrink the bounding box."),
-            ActualAreaSqKm, LatKm, LonKm, GOSMMaxRegionAreaSqKm));
+        State.FetchStatusText = FText::FromString(
+            TEXT("No region set. Search for a place, paste a bounding box, or type the four bounds."));
         return FReply::Handled();
     }
 
-    UE_LOG(LogTemp, Log, TEXT("OSM fetch: requested %.2f km² -> bbox %.2f x %.2f km (%.2f km²) lat[%.6f..%.6f] lon[%.6f..%.6f]"),
-        State.RequestedAreaSqKm, LatKm, LonKm, ActualAreaSqKm,
-        Bbox.MinLat, Bbox.MaxLat, Bbox.MinLon, Bbox.MaxLon);
+    // No size re-validation here: FOSMRegion's factories already enforce the limits, and every
+    // path that can set State.Region goes through one. This used to be a second, independently
+    // written check — and the two disagreed.
+    const FOSMRegion& Region = State.Region;
+
+    UE_LOG(LogTemp, Log, TEXT("OSM fetch: %.2f x %.2f km (%.2f km2) over %s"),
+        Region.GetWidthKm(), Region.GetHeightKm(), Region.GetAreaSqKm(), *Region.ToString());
 
     State.bIsFetching = true;
     State.bOSMFetchDone = false;
@@ -835,23 +905,31 @@ FReply SOSMImportWizard::OnFetchRegionClicked()
     State.LastDEMFetchError.Empty();
     State.FetchStatusText = FText::FromString(TEXT("Fetching OSM data + elevation..."));
 
-    if (FOSMRegionCache::HasCachedOSM(Bbox))
+    // Cache reuse is now conditional on the fetch TERMS matching, not just the region. The
+    // key used to be the bounding box alone, so changing the DEM dataset or the request
+    // padding left every previously-fetched region silently serving files obtained under the
+    // old settings — you would change a setting, re-run, and see an identical result.
+    const UOSMWorldGenSettings* Settings = GetDefault<UOSMWorldGenSettings>();
+    const FString DEMType = Settings->OpenTopographyDemType;
+    const double DEMPadding = FOSMOpenTopographyClient::FetchPaddingDegrees;
+
+    if (FOSMRegionCache::HasValidCachedOSM(Region, DEMType, DEMPadding))
     {
         OnOverpassFetchComplete(true, FString());
     }
     else
     {
-        FOSMOverpassClient::FetchAsync(Bbox, FOSMRegionCache::GetOSMFilePath(Bbox),
+        FOSMOverpassClient::FetchAsync(Region, FOSMRegionCache::GetOSMFilePath(Region),
             FOSMOverpassClient::FOnFetchComplete::CreateSP(this, &SOSMImportWizard::OnOverpassFetchComplete));
     }
 
-    if (FOSMRegionCache::HasCachedDEM(Bbox))
+    if (FOSMRegionCache::HasValidCachedDEM(Region, DEMType, DEMPadding))
     {
         OnOpenTopographyFetchComplete(true, FString());
     }
     else
     {
-        FOSMOpenTopographyClient::FetchAsync(Bbox, FOSMRegionCache::GetDEMFilePath(Bbox),
+        FOSMOpenTopographyClient::FetchAsync(Region, FOSMRegionCache::GetDEMFilePath(Region),
             FOSMOpenTopographyClient::FOnFetchComplete::CreateSP(this, &SOSMImportWizard::OnOpenTopographyFetchComplete));
     }
 
@@ -866,8 +944,7 @@ void SOSMImportWizard::OnOverpassFetchComplete(bool bSuccess, const FString& Err
 
     if (bSuccess)
     {
-        FOSMRegionCache::FBoundingBox Bbox{ State.FetchMinLat, State.FetchMaxLat, State.FetchMinLon, State.FetchMaxLon };
-        State.OSMFilePath = FOSMRegionCache::GetOSMFilePath(Bbox);
+        State.OSMFilePath = FOSMRegionCache::GetOSMFilePath(State.Region);
     }
 
     CheckFetchCompletion();
@@ -881,8 +958,7 @@ void SOSMImportWizard::OnOpenTopographyFetchComplete(bool bSuccess, const FStrin
 
     if (bSuccess)
     {
-        FOSMRegionCache::FBoundingBox Bbox{ State.FetchMinLat, State.FetchMaxLat, State.FetchMinLon, State.FetchMaxLon };
-        State.DEMFilePath = FOSMRegionCache::GetDEMFilePath(Bbox);
+        State.DEMFilePath = FOSMRegionCache::GetDEMFilePath(State.Region);
     }
     // DEM failure is a soft failure by design (plan_v2_workflow.md §10: falls back to
     // manual .tif upload, or flat terrain if that's skipped too) — it must never block
@@ -905,21 +981,37 @@ void SOSMImportWizard::CheckFetchCompletion()
         State.FetchStatusText = FText::FromString(State.bDEMFetchSucceeded
             ? TEXT("Region data fetched successfully.")
             : FString::Printf(TEXT("OSM data fetched. DEM fetch skipped: %s"), *State.LastDEMFetchError));
+        // Scanning the fetched file records what is IN it, which is legitimately larger than
+        // the region: Overpass returns the full geometry of any way or relation that merely
+        // overlaps the query box. That observation now lands in ScanPreviewBounds, which no
+        // import path reads, so it can no longer be mistaken for the region the way it was
+        // when both lived in the same fields.
         AnalyzeSelectedFiles();
 
-        // AnalyzeSelectedFiles() rescans the fetched OSM file and can end up with bounds
-        // far larger than what was actually requested: Overpass's "(._;>;)" recursion pulls
-        // in the FULL geometry of any relation that merely overlaps the query bbox (e.g. an
-        // administrative/state boundary spanning hundreds of km), which blows out the
-        // computed extent and mis-sizes/mis-places the terrain. For an auto-fetched region
-        // we already know the true requested bbox — trust that instead of the rescan.
-        State.MinLat = State.FetchMinLat;
-        State.MaxLat = State.FetchMaxLat;
-        State.MinLon = State.FetchMinLon;
-        State.MaxLon = State.FetchMaxLon;
-        State.GeoOrigin.Latitude = (State.MinLat + State.MaxLat) * 0.5;
-        State.GeoOrigin.Longitude = (State.MinLon + State.MaxLon) * 0.5;
-        State.GeoOrigin.HeightMeters = 0.0;
+        State.GeoOrigin = State.Region.GetGeoOrigin();
+
+        // Record provenance so a later run can tell whether these files are still reusable.
+        FOSMCacheManifest Manifest;
+        Manifest.MinLat = State.Region.GetMinLat();
+        Manifest.MaxLat = State.Region.GetMaxLat();
+        Manifest.MinLon = State.Region.GetMinLon();
+        Manifest.MaxLon = State.Region.GetMaxLon();
+        Manifest.OverpassUrl = FOSMOverpassClient::GetLastSuccessfulEndpoint();
+        Manifest.DEMType = GetDefault<UOSMWorldGenSettings>()->OpenTopographyDemType;
+        Manifest.DEMPaddingDegrees = FOSMOpenTopographyClient::FetchPaddingDegrees;
+        Manifest.FetchedAtUtc = FDateTime::UtcNow();
+        Manifest.OSMFileSize = IFileManager::Get().FileSize(*State.OSMFilePath);
+        Manifest.DEMFileSize = State.bDEMFetchSucceeded && !State.DEMFilePath.IsEmpty()
+            ? IFileManager::Get().FileSize(*State.DEMFilePath)
+            : 0;
+        Manifest.LastValidationVerdict = TEXT("not yet validated");
+
+        if (!FOSMRegionCache::SaveManifest(State.Region, Manifest))
+        {
+            UE_LOG(LogTemp, Warning,
+                TEXT("OSM fetch: could not write cache manifest for %s — these files will be re-fetched next time."),
+                *State.Region.ToString());
+        }
     }
     else
     {
@@ -964,158 +1056,97 @@ FReply SOSMImportWizard::OnStartGeneration()
 {
     CurrentStepIndex = 3;
     State.bIsGenerating = true;
-    State.StatusText = FText::FromString(TEXT("Parsing OpenStreetMap file..."));
+    State.StatusText = FText::FromString(TEXT("Validating and importing..."));
     State.ProgressPercent = 0.1f;
 
-    const FString OSMPath = State.OSMFilePath;
-
-    // Resolve the region to generate at this single point of use, rather than trusting
-    // State.MinLat/MaxLat/GeoOrigin as-is: those fields do double duty as a manual-file-scan
-    // preview (rewritten by AnalyzeSelectedFiles(), which itself runs from five different call
-    // sites — both file Browse buttons and the post-fetch completion handler) AND as the
-    // generation source of truth, and the two purposes have been observed to fight over the
-    // same fields. The bbox that was actually validated and fetched (FetchMinLat/MaxLat/...,
-    // gated to a few km by OnFetchRegionClicked before any network call is made) is the one
-    // value that cannot lie about what region was requested, so prefer it whenever it's set.
-    double RegionMinLat = 0.0, RegionMaxLat = 0.0, RegionMinLon = 0.0, RegionMaxLon = 0.0;
-    bool bHaveRegion = false;
-    const bool bFetchRegionValid = (State.FetchMaxLat > State.FetchMinLat) && (State.FetchMaxLon > State.FetchMinLon);
-    if (bFetchRegionValid)
+    // The region is read, never recomputed. Previously this function rebuilt bounds from
+    // several competing sources and picked between them here, at the point of use — which is
+    // how a 1.5 km request became a 500 km landscape when one source was quietly wrong.
+    if (!State.Region.IsValid())
     {
-        RegionMinLat = State.FetchMinLat; RegionMaxLat = State.FetchMaxLat;
-        RegionMinLon = State.FetchMinLon; RegionMaxLon = State.FetchMaxLon;
-        bHaveRegion = true;
-    }
-    else if (State.MaxLat > State.MinLat && State.MaxLon > State.MinLon)
-    {
-        RegionMinLat = State.MinLat; RegionMaxLat = State.MaxLat;
-        RegionMinLon = State.MinLon; RegionMaxLon = State.MaxLon;
-        bHaveRegion = true;
-    }
-
-    FOSMGeoOrigin Origin;
-    if (bHaveRegion)
-    {
-        Origin.Latitude = (RegionMinLat + RegionMaxLat) * 0.5;
-        Origin.Longitude = (RegionMinLon + RegionMaxLon) * 0.5;
-        Origin.HeightMeters = 0.0;
-    }
-    else
-    {
-        Origin = State.GeoOrigin;
-    }
-
-    // Which file is actually being generated from, and over what region — from both possible
-    // sources — is the single most useful thing to know when the output is wrong.
-    UE_LOG(LogTemp, Log,
-        TEXT("OSM generation: file='%s' | FetchRegion(valid=%d) lat[%.6f..%.6f] lon[%.6f..%.6f] | ")
-        TEXT("State.MinLat/MaxLat lat[%.6f..%.6f] lon[%.6f..%.6f] | chosen region lat[%.6f..%.6f] lon[%.6f..%.6f] | origin lat %.6f lon %.6f"),
-        *OSMPath, bFetchRegionValid ? 1 : 0,
-        State.FetchMinLat, State.FetchMaxLat, State.FetchMinLon, State.FetchMaxLon,
-        State.MinLat, State.MaxLat, State.MinLon, State.MaxLon,
-        RegionMinLat, RegionMaxLat, RegionMinLon, RegionMaxLon,
-        Origin.Latitude, Origin.Longitude);
-
-    // Parse OSM XML file
-    FOSMParseResult ParseResult;
-    if (!FOSMParser::Parse(OSMPath, ParseResult))
-    {
-        State.StatusText = FText::FromString(TEXT("Failed to parse OSM file."));
-        State.bIsGenerating = false;
-        return FReply::Handled();
-    }
-
-    State.StatusText = FText::FromString(TEXT("Classifying features and computing ENU coordinates..."));
-    State.ProgressPercent = 0.4f;
-
-    // Tag Classification. Clip to the requested region first: an Overpass bbox query returns
-    // any relation whose bounding box merely overlaps the request (boundaries, long-distance
-    // routes, rivers) in full, and a single such feature is enough to blow the computed
-    // extent out to hundreds of km — which then mis-sizes the terrain and crashes the
-    // renderer on float precision.
-    FOSMFeatureTable FeatureTable;
-    if (bHaveRegion)
-    {
-        FeatureTable.SetClipBounds(RegionMinLat, RegionMinLon, RegionMaxLat, RegionMaxLon);
-    }
-
-    FOSMTagClassifier Classifier;
-    Classifier.ClassifyAll(ParseResult, FeatureTable);
-
-    const FVector2D ExtentKm = FeatureTable.GetApproxExtentKm();
-    UE_LOG(LogTemp, Log, TEXT("OSM generation: %d features after clipping | extent ~%.2f x %.2f km"),
-        FeatureTable.Num(), ExtentKm.X, ExtentKm.Y);
-
-    State.StatusText = FText::FromString(TEXT("Summarising imported features..."));
-    State.ProgressPercent = 0.8f;
-
-    // ---- No 3D generation happens here any more (plan_v3_pipeline.md Phase 0) ----
-    //
-    // Everything that spawned actors — terrain Landscape, road meshes, building extrusion,
-    // area polygons, sky/lighting — has been removed. It produced geometry scattered across
-    // several Z-levels because there was no inspectable stage between "file on disk" and
-    // "actors in the world": defects were only ever discoverable as broken geometry, after
-    // the most expensive step had already run.
-    //
-    // The replacement is the City Graph (Phase 2) plus the Control Center UI (Phase 3), which
-    // make the interpretation of the data reviewable BEFORE anything is built. Until those
-    // land, this step's job is to prove the import is sound and report exactly what was
-    // understood from the files.
-
-    // Prove the DEM is readable and georeferenced consistently with the OSM data, rather than
-    // discovering at generation time that it silently fell back to flat ground.
-    FString ElevationSummary = TEXT("no DEM supplied (flat ground)");
-    if (!State.DEMFilePath.IsEmpty())
-    {
-        FOSMDEMSampler Sampler;
-        if (Sampler.Load(State.DEMFilePath))
+        // Manual file selection with no fetched region: the scanned extent is the only thing
+        // available, so promote it explicitly and visibly rather than silently treating an
+        // observation as a target.
+        if (State.ScanPreviewBounds.IsValid())
         {
-            const FOSMGeoTIFFTile& Tile = Sampler.GetTileMetadata();
-            const bool bCoversRegion = !bHaveRegion ||
-                (Tile.GetMinLat() <= RegionMinLat && Tile.GetMaxLat() >= RegionMaxLat &&
-                 Tile.GetMinLon() <= RegionMinLon && Tile.GetMaxLon() >= RegionMaxLon);
-
-            ElevationSummary = FString::Printf(
-                TEXT("%d x %d px, elevation %.1f-%.1f m, bounds lat[%.5f..%.5f] lon[%.5f..%.5f]%s"),
-                Tile.Width, Tile.Height, Tile.MinElevation, Tile.MaxElevation,
-                Tile.GetMinLat(), Tile.GetMaxLat(), Tile.GetMinLon(), Tile.GetMaxLon(),
-                bCoversRegion ? TEXT("") : TEXT("  [WARNING: does not fully cover the requested region]"));
+            FOSMRegion Promoted;
+            FString Error;
+            if (FOSMRegion::FromBoundingBox(
+                    State.ScanPreviewBounds.GetMinLat(), State.ScanPreviewBounds.GetMinLon(),
+                    State.ScanPreviewBounds.GetMaxLat(), State.ScanPreviewBounds.GetMaxLon(),
+                    Promoted, Error))
+            {
+                State.Region = Promoted;
+                UE_LOG(LogTemp, Log,
+                    TEXT("OSM import: no fetched region; using the scanned extent of the selected files (%s)."),
+                    *Promoted.ToString());
+            }
+            else
+            {
+                State.ImportSummary = FString::Printf(
+                    TEXT("Cannot import: the selected files cover %s, which is not a usable region.\n\n%s"),
+                    *State.ScanPreviewBounds.ToString(), *Error);
+                State.bHasImportReport = false;
+                State.StatusText = FText::FromString(TEXT("Import rejected."));
+                State.ProgressPercent = 1.0f;
+                State.bIsGenerating = false;
+                CurrentStepIndex = 4;
+                return FReply::Handled();
+            }
         }
         else
         {
-            ElevationSummary = FString::Printf(TEXT("FAILED to load '%s'"), *State.DEMFilePath);
+            State.ImportSummary = TEXT(
+                "Cannot import: no region has been set.\n\n"
+                "Fetch a region, or select an .osm file so its extent can be scanned.");
+            State.bHasImportReport = false;
+            State.StatusText = FText::FromString(TEXT("Import rejected."));
+            State.ProgressPercent = 1.0f;
+            State.bIsGenerating = false;
+            CurrentStepIndex = 4;
+            return FReply::Handled();
         }
     }
 
-    // Per-category breakdown: the first honest answer to "what is actually in my data?".
-    FString Breakdown;
-    for (uint8 TypeIdx = 0; TypeIdx < static_cast<uint8>(EOSMFeatureType::MAX); ++TypeIdx)
-    {
-        const EOSMFeatureType Type = static_cast<EOSMFeatureType>(TypeIdx);
-        const int32 Count = FeatureTable.GetCountByType(Type);
-        if (Count > 0)
-        {
-            Breakdown += FString::Printf(TEXT("  %-14s %d\n"), *OSMFeatureTypeToString(Type), Count);
-        }
-    }
+    State.StatusText = FText::FromString(TEXT("Running validation gates..."));
+    State.ProgressPercent = 0.4f;
 
-    UE_LOG(LogTemp, Log, TEXT("OSM import summary:\n  Region      lat[%.6f..%.6f] lon[%.6f..%.6f]\n")
-        TEXT("  Extent      %.2f x %.2f km\n  Features    %d\n%s  Elevation   %s"),
-        RegionMinLat, RegionMaxLat, RegionMinLon, RegionMaxLon,
-        ExtentKm.X, ExtentKm.Y, FeatureTable.Num(), *Breakdown, *ElevationSummary);
+    // One call runs both file gates, the cross-file gate, and classification, in the order
+    // that guarantees a malformed file never reaches the code that would choke on it.
+    FOSMFeatureTable FeatureTable;
+    State.ImportReport = FOSMImportValidator::Run(
+        State.Region, State.OSMFilePath, State.DEMFilePath, FeatureTable);
+    State.bHasImportReport = true;
 
-    State.ImportSummary = FString::Printf(
-        TEXT("Import complete — no 3D assets generated (by design).\n\n")
-        TEXT("Region:     lat %.6f..%.6f, lon %.6f..%.6f\n")
-        TEXT("Extent:     %.2f x %.2f km\n")
-        TEXT("Features:   %d\n\n%s\nElevation:  %s\n\n")
-        TEXT("Next: the City Graph and Control Center (plan_v3_pipeline.md Phases 2-3) will turn ")
-        TEXT("these features into inspectable nodes and relationships before any geometry is built."),
-        RegionMinLat, RegionMaxLat, RegionMinLon, RegionMaxLon,
-        ExtentKm.X, ExtentKm.Y, FeatureTable.Num(), *Breakdown, *ElevationSummary);
-
+    State.GeoOrigin = State.Region.GetGeoOrigin();
+    State.ImportSummary = State.ImportReport.ToDisplayString();
     State.GeneratedActorCount = 0;
-    State.StatusText = FText::FromString(TEXT("Import complete."));
+
+    // Full findings go to the log — including Info-level ones the summary omits — so a
+    // support question can be answered from a log paste alone.
+    UE_LOG(LogTemp, Log, TEXT("OSM import report:\n%s\n\nAll findings:\n%s"),
+        *State.ImportSummary, *State.ImportReport.Validation.ToString());
+
+    // Record the verdict against the cached files, so the next run can see that these exact
+    // files were already judged good or bad.
+    if (!State.OSMFilePath.IsEmpty())
+    {
+        FOSMCacheManifest Manifest;
+        if (FOSMRegionCache::LoadManifest(State.Region, Manifest))
+        {
+            Manifest.LastValidationVerdict = State.ImportReport.IsAccepted()
+                ? TEXT("accepted")
+                : FString::Printf(TEXT("rejected: %s"),
+                    State.ImportReport.Validation.FindFirst(EOSMIssueSeverity::Fatal)
+                        ? *State.ImportReport.Validation.FindFirst(EOSMIssueSeverity::Fatal)->Code
+                        : TEXT("unknown"));
+            FOSMRegionCache::SaveManifest(State.Region, Manifest);
+        }
+    }
+
+    State.StatusText = FText::FromString(State.ImportReport.IsAccepted()
+        ? TEXT("Import complete.")
+        : TEXT("Import rejected — see the summary."));
     State.ProgressPercent = 1.0f;
     State.bIsGenerating = false;
     CurrentStepIndex = 4;

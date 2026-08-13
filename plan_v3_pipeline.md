@@ -208,11 +208,37 @@ Each gets an automation test asserting accept/reject **and** the specific reason
 
 ### 1.6 Acceptance criteria
 
-- [ ] Every corpus file produces the expected verdict
-- [ ] No malformed file reaches Phase 2
-- [ ] Every rejection names the actual cause
-- [ ] Import report displayed after fetch
-- [ ] Fetch → validated files is reliably one click
+- [x] Every corpus file produces the expected verdict
+- [x] No malformed file reaches Phase 2
+- [x] Every rejection names the actual cause
+- [x] Import report displayed after fetch
+- [x] Fetch → validated files is reliably one click
+
+**Status: complete.** 7 automation tests pass (`Automation RunTests OSMWorldGen`, exit code 0).
+
+Delivered:
+
+| Task | Where |
+|---|---|
+| 1.1 `FOSMRegion` | `Core/{Public,Private}/Region/FOSMRegion.*` — validating factories, invalid by default |
+| 1.2 Cache manifest | `Editor/.../FOSMRegionCache.*` — `region.json`, reuse gated on fetch terms |
+| 1.3 Validation gates | `Core/.../Validation/FOSMDataValidator`, `FOSMDEMValidator`, cross-file in `FOSMImportReport.cpp` |
+| 1.4 Import report | `Core/.../Validation/FOSMImportReport.*`, shown at wizard step 5 |
+| 1.5 Regression corpus | `Tests/make_corpus.py` → `Tests/Data/` (16 files), `Core/Private/Tests/FOSMValidationTests.cpp` |
+
+Two decisions worth recording, both made because the alternative had already caused a bug:
+
+- **Acceptance is computed from the issue list, not stored alongside it.** `FOSMValidationResult`
+  has no `bSucceeded` flag; `IsAccepted()` is `!HasFatal()`. A result cannot claim success while
+  carrying a fatal issue.
+- **Observed bounds are not a region.** `FOSMRegion::ObservedBounds()` skips the size limits and is
+  named so that using it as an import target reads as wrong. The wizard's file-scan preview writes
+  to `ScanPreviewBounds`, which no import path reads — the two used to share fields, and that is
+  precisely how a 1.5 km request became a 500 km landscape.
+
+Also fixed in passing: the region cache was keyed on the bounding box alone, so changing the DEM
+dataset or fetch padding silently reused files fetched under the old terms. The manifest now
+records those terms and reuse is conditional on them matching.
 
 ---
 
