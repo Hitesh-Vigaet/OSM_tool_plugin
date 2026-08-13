@@ -4,6 +4,7 @@
 #include "Graph/FOSMGraphAssetIO.h"
 #include "Scene/FOSMSceneSetup.h"
 #include "Session/FOSMGraphSession.h"
+#include "Generation/FOSMDryRunReport.h"
 #include "Settings/UOSMWorldGenSettings.h"
 #include "Elevation/FOSMGeoTIFFTile.h"
 #include "Graph/UOSMCityGraph.h"
@@ -299,6 +300,17 @@ TSharedRef<SWidget> SOSMControlCenter::BuildHeader()
             + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
             [
                 SNew(SButton)
+                .Text(LOCTEXT("DryRun", "Dry Run"))
+                .ToolTipText(LOCTEXT("DryRunTip",
+                    "Report exactly what generation would produce — counts, assets, ratios, "
+                    "fallbacks and corridor grouping.\nCreates nothing."))
+                .IsEnabled_Lambda([this]() { return Graph.IsValid(); })
+                .OnClicked(this, &SOSMControlCenter::OnDryRun)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
+            [
+                SNew(SButton)
                 .Text(LOCTEXT("SaveGraph", "Save Graph Asset"))
                 .ToolTipText(LOCTEXT("SaveGraphTip",
                     "Save this graph and its configuration as a .uasset so the region can be reopened "
@@ -318,6 +330,24 @@ FReply SOSMControlCenter::OnSetUpScene()
 
     // The overlay is cleared by level changes, so redraw once the environment exists.
     RefreshOverlay();
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnDryRun()
+{
+    if (!Graph.IsValid())
+    {
+        DryRunText = TEXT("No graph loaded.");
+        return FReply::Handled();
+    }
+
+    const FOSMDryRunReport DryRun = FOSMDryRun::Run(*Graph);
+    DryRunText = DryRun.ToDisplayString();
+
+    // Logged as well as shown: the panel is scrollable but transient, and a dry run is the thing
+    // most worth pasting into a conversation when something looks wrong.
+    UE_LOG(LogTemp, Log, TEXT("OSM dry run:\n%s"), *DryRunText);
+
     return FReply::Handled();
 }
 
@@ -1129,6 +1159,16 @@ TSharedRef<SWidget> SOSMControlCenter::BuildIssuesPanel()
                                     TEXT("%d flagged node(s) — kept, not dropped. Flagged rows are highlighted "
                                          "in the explorer."), Flagged.Num()));
                             }
+                        }
+
+                        // The dry run answers a different question from the issues list, but it
+                        // is the thing you want to read right after configuring ratios, so it
+                        // shares this panel rather than needing another one.
+                        if (!DryRunText.IsEmpty())
+                        {
+                            Lines.Add(TEXT(""));
+                            Lines.Add(TEXT("────────────────────────────────────────"));
+                            Lines.Add(DryRunText);
                         }
 
                         return Lines.Num() > 0

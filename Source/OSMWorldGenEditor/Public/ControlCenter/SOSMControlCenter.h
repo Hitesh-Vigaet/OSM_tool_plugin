@@ -178,6 +178,12 @@ private:
     /** Reopen the last saved graph asset, for when the editor was restarted. */
     FReply OnLoadSavedGraph();
 
+    /** Report what generation would produce, without producing any of it. */
+    FReply OnDryRun();
+
+    /** Last dry-run output, shown in the issues panel area. */
+    FString DryRunText;
+
     /** Last scene-setup result, shown in the header so the action is not silent. */
     FString SceneSetupStatus;
 

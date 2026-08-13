@@ -517,6 +517,28 @@ actor/triangle budget) with nothing spawned. The last checkpoint before geometry
 
 ---
 
+**Phase 4 status: 4.0, 4.2, 4.3, 4.4 complete.** 23 automation tests pass.
+
+| Task | Where |
+|---|---|
+| 4.0 `docs/pcg-reference.md` | Read out of `Engine/Plugins/PCG/Source/PCG/Public/` in this install |
+| 4.2 Deterministic selection | `Core/Generation/FOSMAssetSelector.*` |
+| 4.3 Fallback chain | Same — every node reports an outcome, never an absence |
+| 4.4 Dry run | `Core/Generation/FOSMDryRunReport.*`, "Dry Run" button in the Control Center |
+
+**4.1 (graph → live PCG data) is deliberately not built yet.** The dry run states which PCG type
+each category maps to, which is what the decision needs; constructing `UPCGBasePointData` and
+`UPCGSplineData` for real belongs with Phase 5, where something consumes them. Building the
+converter now would mean writing against an API with no consumer to prove it right — the same
+mistake as the graph save path that sat unexercised until the Control Center needed it.
+
+The most consequential thing the reference turned up: **`UPCGPointData` is deprecated as of 5.6**
+in favour of `UPCGBasePointData` / `UPCGPointArrayData`, and the concrete class is chosen by a
+CVar, so point data must come from `FPCGContext::NewPointData_AnyThread` rather than being
+allocated directly. Most PCG material still shows the old form.
+
+---
+
 ## Phase 5 — Generation (only after 1–4 are signed off)
 
 Deliberately not detailed yet — it should be designed against a working graph, not imagined now.
