@@ -3,6 +3,7 @@
 #include "ControlCenter/SOSMControlCenter.h"
 #include "Graph/FOSMGraphAssetIO.h"
 #include "Scene/FOSMSceneSetup.h"
+#include "Elevation/FOSMGeoTIFFTile.h"
 #include "Graph/UOSMCityGraph.h"
 #include "DrawDebugHelpers.h"
 #include "Editor.h"
@@ -137,6 +138,28 @@ void SOSMControlCenter::SetGraph(UOSMCityGraph* InGraph, const FOSMRegion& InReg
     Report = InReport;
     SelectedNodeId = INDEX_NONE;
 
+    // Load the elevation raster the graph was imported with, so the overlay can be draped onto
+    // the real surface rather than drawn flat.
+    bHasDEM = false;
+    DEMBaseElevationMeters = 0.0;
+
+    if (Graph.IsValid() && !Graph->SourceDEMFile.IsEmpty() && DEMSampler.Load(Graph->SourceDEMFile))
+    {
+        bHasDEM = true;
+
+        const FOSMGeoTIFFTile& Tile = DEMSampler.GetTileMetadata();
+
+        // Drawn relative to the lowest point rather than at absolute altitude: Bangalore sits
+        // ~900 m above sea level, and an overlay 90,000 units above the origin would be off
+        // screen for anyone who framed the region.
+        DEMBaseElevationMeters = Tile.MinElevation;
+
+        UE_LOG(LogTemp, Log,
+            TEXT("Control Center: DEM loaded — %d x %d, elevation %.1f to %.1f m (relief %.1f m)"),
+            Tile.Width, Tile.Height, Tile.MinElevation, Tile.MaxElevation,
+            Tile.MaxElevation - Tile.MinElevation);
+    }
+
     RebuildExplorer();
     RefreshRelationshipList();
     RefreshAssetRules();
@@ -160,10 +183,19 @@ TSharedRef<SWidget> SOSMControlCenter::BuildHeader()
                     {
                         return LOCTEXT("NoGraph", "No city graph loaded. Run an import from the wizard.");
                     }
+                    FString Elevation = TEXT("no DEM");
+                    if (bHasDEM)
+                    {
+                        const FOSMGeoTIFFTile& Tile = DEMSampler.GetTileMetadata();
+                        Elevation = FString::Printf(TEXT("elevation %.0f–%.0f m (%.0f m relief)"),
+                            Tile.MinElevation, Tile.MaxElevation,
+                            Tile.MaxElevation - Tile.MinElevation);
+                    }
+
                     return FText::FromString(FString::Printf(
-                        TEXT("Region %s  ·  %.2f km²  ·  %d nodes, %d relationships, %d groups"),
+                        TEXT("Region %s  ·  %.2f km²  ·  %d nodes, %d relationships, %d groups  ·  %s"),
                         *Region.ToString(), Region.GetAreaSqKm(),
-                        Graph->NumNodes(), Graph->NumEdges(), Graph->Groups.Num()));
+                        Graph->NumNodes(), Graph->NumEdges(), Graph->Groups.Num(), *Elevation));
                 })
             ]
 
@@ -195,6 +227,22 @@ TSharedRef<SWidget> SOSMControlCenter::BuildHeader()
                 .ToolTipText(LOCTEXT("RedrawOverlayTip",
                     "Redraw the graph in the level viewport. Debug lines only — no actors are created."))
                 .OnClicked(this, &SOSMControlCenter::OnRefreshOverlayClicked)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
+            [
+                SNew(SButton)
+                .Text_Lambda([this]()
+                {
+                    return bDrapeOnTerrain
+                        ? LOCTEXT("DrapeOn", "Terrain: Draped")
+                        : LOCTEXT("DrapeOff", "Terrain: Flat");
+                })
+                .ToolTipText(LOCTEXT("DrapeTip",
+                    "Lift the overlay onto the DEM surface, or draw it flat.\n"
+                    "Heights are shown relative to the lowest point in the raster."))
+                .IsEnabled_Lambda([this]() { return bHasDEM; })
+                .OnClicked(this, &SOSMControlCenter::OnToggleDrape)
             ]
 
             + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
@@ -961,12 +1009,14 @@ void SOSMControlCenter::RefreshOverlay()
     const double MetersPerDegLat = 111320.0;
     const double MetersPerDegLon = MetersPerDegLat * FMath::Cos(FMath::DegreesToRadians(CentreLat));
 
+    // Z is the sampled ground height plus a small per-category offset. The offset alone is what
+    // made everything look flat: it encodes the node's TYPE, not its elevation.
     auto ToWorld = [&](const FVector2D& LatLon, double ZOffset)
     {
         return FVector(
             (LatLon.X - CentreLat) * MetersPerDegLat * 100.0,
             (LatLon.Y - CentreLon) * MetersPerDegLon * 100.0,
-            ZOffset);
+            GetDrapeHeightCm(LatLon) + ZOffset);
     };
 
     for (const FOSMGraphNode& Node : Graph->Nodes)
@@ -1030,6 +1080,33 @@ void SOSMControlCenter::RefreshOverlay()
 
 FReply SOSMControlCenter::OnRefreshOverlayClicked()
 {
+    RefreshOverlay();
+    return FReply::Handled();
+}
+
+double SOSMControlCenter::GetDrapeHeightCm(const FVector2D& LatLon) const
+{
+    if (!bHasDEM || !bDrapeOnTerrain)
+    {
+        return 0.0;
+    }
+
+    const double Elevation = DEMSampler.SampleElevation(LatLon.X, LatLon.Y);
+
+    // NaN means the coordinate falls outside the raster or on a NoData hole. Falling back to the
+    // base rather than skipping the point keeps the outline closed — a footprint with one vertex
+    // silently dropped would look like a geometry bug rather than a data gap.
+    if (FMath::IsNaN(Elevation))
+    {
+        return 0.0;
+    }
+
+    return (Elevation - DEMBaseElevationMeters) * 100.0;
+}
+
+FReply SOSMControlCenter::OnToggleDrape()
+{
+    bDrapeOnTerrain = !bDrapeOnTerrain;
     RefreshOverlay();
     return FReply::Handled();
 }

@@ -7,6 +7,7 @@
 #include "Widgets/DeclarativeSyntaxSupport.h"
 #include "Graph/EOSMGraphTypes.h"
 #include "Graph/FOSMGraphBuilder.h"
+#include "Elevation/FOSMDEMSampler.h"
 #include "Region/FOSMRegion.h"
 #include "UObject/StrongObjectPtr.h"
 
@@ -92,6 +93,26 @@ private:
 
     /** Draw relationship connector lines in the viewport overlay. */
     bool bShowRelationships = false;
+
+    /**
+     * Lift overlay geometry onto the DEM surface instead of drawing it flat.
+     *
+     * Loaded from the graph's source DEM when one is available. This is what makes the overlay
+     * answer "does my elevation data line up with my city?" — a question that otherwise waits
+     * until generation exists, which is exactly the kind of late discovery this pipeline was
+     * rebuilt to avoid.
+     */
+    bool bDrapeOnTerrain = true;
+    FOSMDEMSampler DEMSampler;
+    bool bHasDEM = false;
+
+    /** Lowest elevation in the DEM, so the drape sits near Z=0 rather than 900 m up. */
+    double DEMBaseElevationMeters = 0.0;
+
+    /** Elevation in cm above the base for a coordinate, or 0 when no DEM is loaded. */
+    double GetDrapeHeightCm(const FVector2D& LatLon) const;
+
+    FReply OnToggleDrape();
 
     /** Redraw handle so the overlay can be cleared without clearing everyone else's lines. */
     bool bOverlayActive = false;
