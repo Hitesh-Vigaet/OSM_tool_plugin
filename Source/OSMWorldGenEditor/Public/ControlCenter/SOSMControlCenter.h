@@ -175,6 +175,9 @@ private:
     FReply OnSetUpScene();
     FReply OnFrameRegion();
 
+    /** Reopen the last saved graph asset, for when the editor was restarted. */
+    FReply OnLoadSavedGraph();
+
     /** Last scene-setup result, shown in the header so the action is not silent. */
     FString SceneSetupStatus;
 

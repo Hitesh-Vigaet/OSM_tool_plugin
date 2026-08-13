@@ -3,6 +3,8 @@
 #include "ControlCenter/SOSMControlCenter.h"
 #include "Graph/FOSMGraphAssetIO.h"
 #include "Scene/FOSMSceneSetup.h"
+#include "Session/FOSMGraphSession.h"
+#include "Settings/UOSMWorldGenSettings.h"
 #include "Elevation/FOSMGeoTIFFTile.h"
 #include "Graph/UOSMCityGraph.h"
 #include "DrawDebugHelpers.h"
@@ -119,6 +121,15 @@ void SOSMControlCenter::Construct(const FArguments& InArgs)
             ]
         ]
     ];
+
+    // Reopening the panel restores whatever the session is holding, so closing this window is
+    // no longer destructive — it used to discard the import, because the widget owned the only
+    // reference to the graph.
+    FOSMGraphSession& Session = FOSMGraphSession::Get();
+    if (Session.HasGraph())
+    {
+        SetGraph(Session.GetGraph(), Session.GetRegion(), Session.GetReport());
+    }
 }
 
 SOSMControlCenter::~SOSMControlCenter()
@@ -133,6 +144,8 @@ void SOSMControlCenter::SetGraph(UOSMCityGraph* InGraph, const FOSMRegion& InReg
 {
     ClearOverlay();
 
+    // The panel still holds a strong pointer of its own, but it is no longer the only one — the
+    // session keeps the graph alive independently of this widget's lifetime.
     Graph.Reset(InGraph);
     Region = InRegion;
     Report = InReport;
@@ -197,6 +210,22 @@ TSharedRef<SWidget> SOSMControlCenter::BuildHeader()
                         *Region.ToString(), Region.GetAreaSqKm(),
                         Graph->NumNodes(), Graph->NumEdges(), Graph->Groups.Num(), *Elevation));
                 })
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("LoadSaved", "Load Saved Graph"))
+                .ToolTipText(LOCTEXT("LoadSavedTip",
+                    "Reopen the last graph saved with Save Graph Asset.\n"
+                    "Useful after restarting the editor, when the in-memory session is gone."))
+                .Visibility_Lambda([this]()
+                {
+                    // Only offered when there is nothing loaded: with a graph on screen this
+                    // button would be a way to lose your place, not a way to recover it.
+                    return Graph.IsValid() ? EVisibility::Collapsed : EVisibility::Visible;
+                })
+                .OnClicked(this, &SOSMControlCenter::OnLoadSavedGraph)
             ]
 
             + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
@@ -289,6 +318,47 @@ FReply SOSMControlCenter::OnSetUpScene()
 
     // The overlay is cleared by level changes, so redraw once the environment exists.
     RefreshOverlay();
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnLoadSavedGraph()
+{
+    const UOSMWorldGenSettings* Settings = GetDefault<UOSMWorldGenSettings>();
+    if (!Settings || Settings->LastSavedGraphPath.IsEmpty())
+    {
+        SceneSetupStatus = TEXT("No saved graph recorded yet — use Save Graph Asset first.");
+        return FReply::Handled();
+    }
+
+    const FString ObjectPath = FString::Printf(TEXT("%s.%s"),
+        *Settings->LastSavedGraphPath, *FPaths::GetCleanFilename(Settings->LastSavedGraphPath));
+
+    UOSMCityGraph* Loaded = LoadObject<UOSMCityGraph>(nullptr, *ObjectPath);
+    if (!Loaded)
+    {
+        SceneSetupStatus = FString::Printf(TEXT("Could not load '%s'."), *ObjectPath);
+        UE_LOG(LogTemp, Warning, TEXT("%s"), *SceneSetupStatus);
+        return FReply::Handled();
+    }
+
+    // The region is rebuilt from the bounds stored on the asset rather than from anything in the
+    // UI, so a reloaded graph describes exactly the region it was built for.
+    FOSMRegion LoadedRegion;
+    FString Error;
+    if (!FOSMRegion::FromBoundingBox(
+            Loaded->RegionMinLat, Loaded->RegionMinLon,
+            Loaded->RegionMaxLat, Loaded->RegionMaxLon, LoadedRegion, Error))
+    {
+        SceneSetupStatus = FString::Printf(TEXT("Saved graph has unusable bounds: %s"), *Error);
+        return FReply::Handled();
+    }
+
+    // The graph report is not serialised with the asset — it describes one build run, not the
+    // graph — so a reloaded graph starts with an empty issues panel rather than a stale one.
+    SetGraph(Loaded, LoadedRegion, FOSMGraphReport());
+    FOSMGraphSession::Get().Set(Loaded, LoadedRegion, FOSMGraphReport());
+
+    SceneSetupStatus = FString::Printf(TEXT("Loaded %s"), *ObjectPath);
     return FReply::Handled();
 }
 
@@ -1291,8 +1361,18 @@ FReply SOSMControlCenter::OnSaveGraph()
         UE_LOG(LogTemp, Log, TEXT("City graph saved to %s"), *FOSMGraphAssetIO::MakePackagePath(Region));
 
         // Point at the saved copy, so subsequent configuration edits land in the asset the user
-        // just created rather than in a transient object that quietly diverges from it.
+        // just created rather than in a transient object that quietly diverges from it. The
+        // session is updated too, or reopening the panel would resurrect the transient one.
         Graph.Reset(Saved);
+        FOSMGraphSession::Get().Set(Saved, Region, Report);
+
+        // Remembered so the panel can offer this graph back after an editor restart, when the
+        // in-memory session is gone.
+        if (UOSMWorldGenSettings* Settings = GetMutableDefault<UOSMWorldGenSettings>())
+        {
+            Settings->LastSavedGraphPath = FOSMGraphAssetIO::MakePackagePath(Region);
+            Settings->SaveConfig();
+        }
     }
     else
     {
@@ -1324,6 +1404,10 @@ void SOSMControlCenter::RegisterTabSpawner()
 
 void SOSMControlCenter::OpenWithGraph(UOSMCityGraph* InGraph, const FOSMRegion& InRegion, const FOSMGraphReport& InReport)
 {
+    // Recorded BEFORE the tab is invoked: spawning the panel constructs it, and construction
+    // restores from the session, so the session has to be current by then.
+    FOSMGraphSession::Get().Set(InGraph, InRegion, InReport);
+
     FGlobalTabmanager::Get()->TryInvokeTab(TabId);
 
     // Repoint the existing panel rather than spawning a second one: two Control Centers drawing

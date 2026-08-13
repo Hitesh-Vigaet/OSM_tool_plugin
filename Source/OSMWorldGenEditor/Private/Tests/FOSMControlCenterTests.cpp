@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Graph/FOSMGenerationConfig.h"
 #include "Graph/FOSMGraphAssetIO.h"
+#include "Session/FOSMGraphSession.h"
 #include "Graph/FOSMGraphBuilder.h"
 #include "Graph/UOSMCityGraph.h"
 #include "Model/FOSMFeatureTable.h"
@@ -252,6 +253,69 @@ bool FOSMGenerationConfigTest::RunTest(const FString& Parameters)
         Config.IsNodeTypeVisible(EOSMNodeType::RoadSegment));
     Config.SetNodeTypeVisible(EOSMNodeType::Building, true);
     TestTrue(TEXT("Unhiding works"), Config.IsNodeTypeVisible(EOSMNodeType::Building));
+
+    return true;
+}
+
+// ===========================================================================
+// Closing the panel must not destroy the import
+// ===========================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOSMGraphSessionTest,
+    "OSMWorldGen.ControlCenter.GraphSession",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FOSMGraphSessionTest::RunTest(const FString& Parameters)
+{
+    FOSMGraphSession& Session = FOSMGraphSession::Get();
+
+    // Restored at the end: this is a process-wide singleton, and a test that leaves it holding
+    // a fixture would corrupt whatever the user had open.
+    UOSMCityGraph* const PreviousGraph = Session.GetGraph();
+    const FOSMRegion PreviousRegion = Session.GetRegion();
+    const FOSMGraphReport PreviousReport = Session.GetReport();
+
+    const FOSMRegion Region = OSMControlCenterTest::MakeRegion();
+    UOSMCityGraph* Graph = OSMControlCenterTest::MakeGraph(Region);
+    const FString ExpectedHash = Graph->ComputeContentHash();
+
+    FOSMGraphReport Report;
+    Report.NodesCreated = Graph->NumNodes();
+
+    Session.Set(Graph, Region, Report);
+
+    TestTrue(TEXT("Session holds the graph"), Session.HasGraph());
+    TestEqual(TEXT("Session returns the same graph"), Session.GetGraph(), Graph);
+    TestNearlyEqual(TEXT("Session preserves the region"),
+        Session.GetRegion().GetMinLat(), Region.GetMinLat(), 1e-12);
+
+    // The regression this guards: the Control Center used to hold the ONLY reference, so
+    // closing the panel dropped the graph and a collection destroyed it. Forcing a full GC with
+    // no widget alive proves the session roots it on its own.
+    CollectGarbage(RF_NoFlags, /*bFullPurge*/ true);
+
+    TestTrue(TEXT("Graph survives garbage collection with no panel open"), Session.HasGraph());
+
+    if (UOSMCityGraph* Survivor = Session.GetGraph())
+    {
+        TestEqual(TEXT("Surviving graph is unchanged"), Survivor->ComputeContentHash(), ExpectedHash);
+        TestEqual(TEXT("Node data survives"), Survivor->NumNodes(), 2);
+        TestEqual(TEXT("Relationships survive"), Survivor->NumEdges(), 1);
+    }
+    else
+    {
+        AddError(TEXT("Graph was collected — the session is not rooting it."));
+    }
+
+    Session.Clear();
+    TestFalse(TEXT("Clear empties the session"), Session.HasGraph());
+    TestNull(TEXT("Cleared session returns no graph"), Session.GetGraph());
+
+    if (PreviousGraph)
+    {
+        Session.Set(PreviousGraph, PreviousRegion, PreviousReport);
+    }
 
     return true;
 }

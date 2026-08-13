@@ -48,6 +48,16 @@ public:
     UPROPERTY(EditAnywhere, config, Category = "Data Sources", meta = (DisplayName = "OpenTopography DEM Type"))
     FString OpenTopographyDemType = TEXT("SRTMGL1");
 
+    /**
+     * Package path of the most recently saved city graph.
+     *
+     * The in-memory session survives closing the Control Center but not restarting the editor.
+     * Remembering the path lets the panel offer the last graph back instead of demanding a
+     * re-fetch, which is the expensive half of an import.
+     */
+    UPROPERTY(config)
+    FString LastSavedGraphPath;
+
     /** Overpass API endpoint used for .osm vector data fetch. No API key required. */
     UPROPERTY(EditAnywhere, config, Category = "Data Sources", meta = (DisplayName = "Overpass API URL"))
     FString OverpassApiUrl = TEXT("https://overpass-api.de/api/interpreter");
