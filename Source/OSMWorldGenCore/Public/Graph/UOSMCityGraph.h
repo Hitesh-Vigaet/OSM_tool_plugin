@@ -6,6 +6,7 @@
 #include "UObject/Object.h"
 #include "Graph/EOSMGraphTypes.h"
 #include "Graph/FOSMGeometryStore.h"
+#include "Graph/FOSMGenerationConfig.h"
 #include "UOSMCityGraph.generated.h"
 
 /**
@@ -187,6 +188,15 @@ public:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "OSM|Graph")
     FOSMGeometryStore Geometry;
+
+    /**
+     * User configuration: asset rules, ratios, seeds, visibility (plan_v3_pipeline.md Phase 3.5).
+     *
+     * Saved with the graph so a region's setup survives closing the editor. Nothing reads this
+     * to generate anything yet — Phase 5 will.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OSM|Graph")
+    FOSMGenerationConfig Config;
 
     /** Source files this graph was built from, for provenance. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "OSM|Graph")

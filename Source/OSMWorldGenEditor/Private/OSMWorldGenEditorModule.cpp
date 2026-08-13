@@ -4,11 +4,16 @@
 #include "Modules/ModuleManager.h"
 #include "ToolMenus.h"
 #include "Wizard/SOSMImportWizard.h"
+#include "ControlCenter/SOSMControlCenter.h"
 
 #define LOCTEXT_NAMESPACE "FOSMWorldGenEditorModule"
 
 void FOSMWorldGenEditorModule::StartupModule()
 {
+    // Registered at startup rather than on first use: the wizard invokes the tab immediately
+    // after an import, and a spawner that does not exist yet silently does nothing.
+    SOSMControlCenter::RegisterTabSpawner();
+
     UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FOSMWorldGenEditorModule::RegisterMenuExtensions));
 }
 
@@ -32,6 +37,18 @@ void FOSMWorldGenEditorModule::RegisterMenuExtensions()
             LOCTEXT("OSMImportWizardTooltip", "Open the 5-step georeferenced OpenStreetMap 3D world import wizard."),
             FSlateIcon(),
             FUIAction(FExecuteAction::CreateStatic(&SOSMImportWizard::OpenWizardWindow))
+        );
+
+        Section.AddMenuEntry(
+            "OSMControlCenter",
+            LOCTEXT("OSMControlCenterLabel", "OSM Control Center"),
+            LOCTEXT("OSMControlCenterTooltip",
+                "Inspect and configure the imported city graph — nodes, relationships, groups and asset ratios."),
+            FSlateIcon(),
+            FUIAction(FExecuteAction::CreateLambda([]()
+            {
+                FGlobalTabmanager::Get()->TryInvokeTab(SOSMControlCenter::TabId);
+            }))
         );
     }
 }

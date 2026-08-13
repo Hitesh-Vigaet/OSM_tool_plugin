@@ -31,6 +31,7 @@
 #include "Settings/UOSMWorldGenSettings.h"
 #include "Graph/FOSMGraphBuilder.h"
 #include "Graph/UOSMCityGraph.h"
+#include "ControlCenter/SOSMControlCenter.h"
 #include "HAL/PlatformProcess.h"
 #include "Widgets/SWindow.h"
 #include "Async/Async.h"
@@ -1156,6 +1157,11 @@ FReply SOSMImportWizard::OnStartGeneration()
 
             UE_LOG(LogTemp, Log, TEXT("City graph report:\n%s\n\n%s"),
                 *State.GraphReport.ToDisplayString(), *Graph->ToSummaryString());
+
+            // Hand the graph straight to the Control Center. The wizard's job ends at "the data
+            // is understood"; everything after that is inspection and configuration, which is
+            // what the Control Center exists for (plan_v3_pipeline.md Phase 3).
+            SOSMControlCenter::OpenWithGraph(Graph, State.Region, State.GraphReport);
         }
     }
 

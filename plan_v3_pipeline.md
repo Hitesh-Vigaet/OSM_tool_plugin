@@ -445,13 +445,39 @@ per-corridor, not per-segment, so one street cannot alternate mud/tar every 10 m
 
 ### 3.7 Acceptance criteria
 
-- [ ] Opens automatically after import
-- [ ] Every graph node visible and selectable
-- [ ] Category toggles isolate correctly in the viewport
-- [ ] Inspector shows complete attributes and relationships
-- [ ] Relationship traversal works
-- [ ] Ratios editable, normalised, persisted
-- [ ] Still zero generated actors
+- [x] Opens automatically after import
+- [x] Every graph node visible and selectable
+- [x] Category toggles isolate correctly in the viewport
+- [x] Inspector shows complete attributes and relationships
+- [x] Relationship traversal works
+- [x] Ratios editable, normalised, persisted
+- [x] Still zero generated actors
+
+**Status: complete.** 17 automation tests pass, exit code 0.
+
+| Task | Where |
+|---|---|
+| 3.1 Shell + asset I/O | `Editor/ControlCenter/SOSMControlCenter.*`, `Editor/Graph/FOSMGraphAssetIO.*` |
+| 3.2 Node explorer | Category → subtype → instance tree, search, per-category visibility |
+| 3.3 Viewport overlay | `RefreshOverlay` — persistent debug lines, colour per type, no actors |
+| 3.4 Inspector | Attributes, tags, metrics, flags + clickable relationship traversal |
+| 3.5 Assets & ratios | `Core/Graph/FOSMGenerationConfig.*`, editable weights/seed/per-corridor |
+| 3.6 Issues panel | Severity-ordered `FOSMGraphReport`, flagged rows highlighted in the explorer |
+
+**Graph save/load landed here**, closing the criterion deferred from 2.7. The round-trip test
+asserts equality by content hash rather than field-by-field, so a property added later cannot be
+silently lost by a test that only checks the fields someone remembered to list.
+
+Two design points worth recording:
+
+- **Ratios are stored as weights, shown as percentages.** Percentages that must total 100 make every
+  edit a multi-field edit, which is how ratios drift. Weights stay independent; the percentage is
+  derived and read-only.
+- **Visibility lives on the graph, not the widget**, so isolating a category survives closing the
+  panel and is saved with the asset.
+
+The overlay is deliberately debug-draw only. If a footprint looks wrong there, it is wrong in the
+data — there is no generation step in between to blame.
 
 ---
 
