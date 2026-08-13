@@ -1,0 +1,575 @@
+<title>City Asset Brief</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* ---- Tokens: complete light palette on bare :root ---------------------- */
+  :root {
+    --ground:      #F6F7F5;
+    --surface:     #FFFFFF;
+    --surface-alt: #EFF1ED;
+    --ink:         #1A1E1C;
+    --ink-soft:    #4A524E;
+    --ink-mute:    #6E7671;
+    --rule:        #DCE0DA;
+    --rule-soft:   #E8EBE5;
+
+    /* Category hues, taken from the plugin's own viewport overlay so the brief
+       reads in the same colour language as the tool the art lands in. */
+    --c-building: #B4762C;
+    --c-road:     #4E5A63;
+    --c-water:    #2E71B8;
+    --c-veg:      #3B8C4A;
+    --c-land:     #7C5CA6;
+    --c-infra:    #B54A32;
+
+    --accent:     var(--c-building);
+    --accent-ink: #FFFFFF;
+
+    --p0-bg: #B4762C; --p0-fg: #FFFFFF;
+    --p1-bg: #DFE4DC; --p1-fg: #3A423E;
+    --p2-bg: transparent; --p2-fg: #6E7671;
+
+    --shadow: 0 1px 2px rgba(20,28,24,.06), 0 8px 24px rgba(20,28,24,.05);
+
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #121513;
+      --surface:     #1A1E1B;
+      --surface-alt: #202521;
+      --ink:         #E9ECE7;
+      --ink-soft:    #B6BDB6;
+      --ink-mute:    #868E88;
+      --rule:        #2C322D;
+      --rule-soft:   #242A25;
+
+      --c-building: #E0A659;
+      --c-road:     #9AA8B2;
+      --c-water:    #6BA8E4;
+      --c-veg:      #6FC17E;
+      --c-land:     #B396DA;
+      --c-infra:    #E58467;
+
+      --accent-ink: #16190F;
+      --p0-bg: #E0A659; --p0-fg: #16190F;
+      --p1-bg: #2C322D; --p1-fg: #C6CDC6;
+      --p2-fg: #868E88;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:      #121513;
+    --surface:     #1A1E1B;
+    --surface-alt: #202521;
+    --ink:         #E9ECE7;
+    --ink-soft:    #B6BDB6;
+    --ink-mute:    #868E88;
+    --rule:        #2C322D;
+    --rule-soft:   #242A25;
+
+    --c-building: #E0A659;
+    --c-road:     #9AA8B2;
+    --c-water:    #6BA8E4;
+    --c-veg:      #6FC17E;
+    --c-land:     #B396DA;
+    --c-infra:    #E58467;
+
+    --accent-ink: #16190F;
+    --p0-bg: #E0A659; --p0-fg: #16190F;
+    --p1-bg: #2C322D; --p1-fg: #C6CDC6;
+    --p2-fg: #868E88;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.3);
+  }
+
+  /* ---- Base -------------------------------------------------------------- */
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px 96px; }
+
+  h1, h2, h3 { text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(2rem, 4.4vw, 3rem); line-height: 1.05; letter-spacing: -.028em; font-weight: 680; }
+  h2 { font-size: 1.5rem; letter-spacing: -.018em; font-weight: 660; }
+  h3 { font-size: 1.02rem; letter-spacing: -.006em; font-weight: 660; }
+  p  { margin: 0; max-width: 68ch; color: var(--ink-soft); }
+
+  .eyebrow {
+    font: 600 .69rem/1 var(--sans);
+    letter-spacing: .16em; text-transform: uppercase; color: var(--ink-mute);
+  }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ---- Header ------------------------------------------------------------ */
+  header { border-bottom: 1px solid var(--rule); margin-bottom: 44px; }
+  .head-inner { display: flex; flex-direction: column; gap: 18px; padding: 56px 0 40px; }
+  .head-meta { display: flex; flex-wrap: wrap; gap: 10px 26px; align-items: baseline; }
+  .head-meta span { font: 500 .8rem/1.4 var(--mono); color: var(--ink-mute); }
+  .lede { font-size: 1.09rem; max-width: 64ch; }
+
+  /* ---- Rule box (the governing principle) -------------------------------- */
+  .rulebox {
+    display: grid; gap: 20px; grid-template-columns: 1fr 1fr;
+    background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 22px 24px; margin: 32px 0 0;
+  }
+  .rulebox > div { display: flex; flex-direction: column; gap: 7px; }
+  .rulebox .k { font: 660 .95rem/1.3 var(--sans); }
+  .rulebox p { font-size: .91rem; }
+  @media (max-width: 720px) { .rulebox { grid-template-columns: 1fr; } }
+
+  /* ---- Sections ---------------------------------------------------------- */
+  section { margin-top: 60px; scroll-margin-top: 20px; }
+  .sec-head { display: flex; flex-direction: column; gap: 9px; margin-bottom: 22px; }
+  .sec-head p { font-size: .95rem; }
+
+  /* ---- Category block ---------------------------------------------------- */
+  .cat { margin-top: 30px; }
+  .cat-title {
+    display: flex; align-items: center; gap: 10px;
+    padding-bottom: 9px; margin-bottom: 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .swatch { width: 11px; height: 11px; border-radius: 2px; flex: none; background: var(--dot, var(--accent)); }
+  .cat-note { font-size: .87rem; color: var(--ink-mute); margin: 9px 0 0; }
+
+  /* ---- Tables ------------------------------------------------------------ */
+  .tw { overflow-x: auto; margin-top: 12px; }
+  table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: .9rem; }
+  thead th {
+    text-align: left; font: 600 .68rem/1 var(--sans);
+    letter-spacing: .13em; text-transform: uppercase; color: var(--ink-mute);
+    padding: 0 12px 9px 0; border-bottom: 1px solid var(--rule); white-space: nowrap;
+  }
+  tbody td { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.name { font-weight: 560; color: var(--ink); white-space: nowrap; }
+  td.note { color: var(--ink-soft); }
+  td.num  { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink-soft); white-space: nowrap; }
+  td.var  { font-family: var(--mono); color: var(--ink-soft); white-space: nowrap; }
+
+  /* ---- Priority chips ---------------------------------------------------- */
+  .p { display: inline-block; font: 600 .66rem/1 var(--mono); letter-spacing: .06em;
+       padding: 4px 7px; border-radius: 2px; white-space: nowrap; }
+  .p0 { background: var(--p0-bg); color: var(--p0-fg); }
+  .p1 { background: var(--p1-bg); color: var(--p1-fg); }
+  .p2 { background: var(--p2-bg); color: var(--p2-fg); border: 1px solid var(--rule); }
+
+  /* ---- Evidence table (measured counts) ---------------------------------- */
+  .evidence { background: var(--surface-alt); border: 1px solid var(--rule); border-radius: 3px; padding: 20px 22px; }
+  .evidence table { min-width: 460px; }
+  .evidence tbody td { border-bottom-color: var(--rule); }
+  .bar { display: block; height: 5px; border-radius: 2px; background: var(--c-building); opacity: .85; }
+
+  /* ---- Spec grid --------------------------------------------------------- */
+  .specs { display: grid; grid-template-columns: repeat(auto-fit, minmax(238px, 1fr)); gap: 1px;
+           background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+  .spec { background: var(--surface); padding: 17px 18px; display: flex; flex-direction: column; gap: 5px; }
+  .spec .k { font: 600 .68rem/1 var(--sans); letter-spacing: .13em; text-transform: uppercase; color: var(--ink-mute); }
+  .spec .v { font: 560 .95rem/1.45 var(--sans); color: var(--ink); }
+  .spec .v code { font-family: var(--mono); font-size: .87rem; }
+
+  /* ---- Callout ----------------------------------------------------------- */
+  .callout {
+    border-left: 2px solid var(--accent); background: var(--surface);
+    padding: 16px 20px; margin-top: 24px; border-radius: 0 3px 3px 0;
+  }
+  .callout p + p { margin-top: 9px; }
+
+  .excl { display: flex; flex-direction: column; gap: 11px; margin-top: 16px; }
+  .excl div { display: flex; gap: 11px; align-items: baseline; font-size: .93rem; color: var(--ink-soft); }
+  .excl b { color: var(--ink); font-weight: 600; flex: none; }
+
+  footer { margin-top: 72px; padding-top: 22px; border-top: 1px solid var(--rule);
+           font-size: .84rem; color: var(--ink-mute); }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<header>
+  <div class="wrap">
+    <div class="head-inner">
+      <span class="eyebrow">Asset production brief · OSM World Generator</span>
+      <h1>City Asset Brief</h1>
+      <p class="lede">
+        Everything the art team needs to collect for procedural city generation from OpenStreetMap
+        data. Quantities and priorities are measured from two real Bangalore regions — 1,850 tagged
+        buildings, 1,379 road elements, 587 amenities — not estimated.
+      </p>
+      <div class="head-meta">
+        <span>Target: Unreal Engine 5.8</span>
+        <span>Region sampled: UB City &amp; Indiranagar, Bangalore</span>
+        <span>Buildings measured: 1,850</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ================= GOVERNING RULE ================= -->
+  <section id="rule" style="margin-top:0">
+    <div class="sec-head">
+      <span class="eyebrow">Read this first</span>
+      <h2>What we are not asking for</h2>
+      <p>
+        <strong>Do not model whole buildings.</strong> Footprints in the data range from 19.5&nbsp;m²
+        to 7,814&nbsp;m² — a 401× spread — with aspect ratios up to 6.1. No library of building
+        meshes survives that range; scaling one to fit produces huts and apartment blocks made of the
+        same stretched geometry, with windows scaled to nonsense.
+      </p>
+    </div>
+
+    <div class="rulebox">
+      <div>
+        <span class="k">Buildings are generated</span>
+        <p>
+          The engine extrudes each building from its own footprint to its own height, then applies a
+          <em>style recipe</em>. Walls subdivide into fixed-width bays, so window spacing stays
+          constant at any size.
+        </p>
+      </div>
+      <div>
+        <span class="k">You supply the parts</span>
+        <p>
+          Tiling <strong>materials</strong> for flat surfaces, and small <strong>meshes</strong> that
+          slot onto generated walls — windows, doors, balconies, rooftop clutter — plus everything
+          that stands on the ground.
+        </p>
+      </div>
+    </div>
+
+    <div class="callout">
+      <p><strong>The dividing line.</strong> If it has real depth you would notice from the pavement,
+      it is a mesh. If it is flat detail that a normal map and parallax can carry, it is a material.</p>
+      <p>A window <em>frame</em> is a mesh. The <em>brick around it</em> is a material.</p>
+    </div>
+  </section>
+
+  <!-- ================= EVIDENCE ================= -->
+  <section id="evidence">
+    <div class="sec-head">
+      <span class="eyebrow">Why these priorities</span>
+      <h2>What the data actually contains</h2>
+      <p>Counts from the sampled regions. Priority tiers below follow these frequencies —
+      P0 items appear in the hundreds, P2 items in single digits.</p>
+    </div>
+
+    <div class="evidence">
+      <div class="tw">
+        <table>
+          <thead>
+            <tr><th>Feature</th><th>Count</th><th>Share</th><th style="width:34%">Weight</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="name">Buildings, untyped (<span class="mono">building=yes</span>)</td><td class="num">1,393</td><td class="num">75.3%</td><td><span class="bar" style="width:100%"></span></td></tr>
+            <tr><td class="name">Trees, individually mapped</td><td class="num">333</td><td class="num">87.2% of natural</td><td><span class="bar" style="width:24%"></span></td></tr>
+            <tr><td class="name">Street lamps</td><td class="num">297</td><td class="num">21.5% of highway</td><td><span class="bar" style="width:21%"></span></td></tr>
+            <tr><td class="name">Footways</td><td class="num">370</td><td class="num">26.8% of highway</td><td><span class="bar" style="width:27%"></span></td></tr>
+            <tr><td class="name">Kerbs</td><td class="num">119</td><td class="num">47.4% of barrier</td><td><span class="bar" style="width:9%"></span></td></tr>
+            <tr><td class="name">Commercial buildings</td><td class="num">132</td><td class="num">7.1%</td><td><span class="bar" style="width:9%"></span></td></tr>
+            <tr><td class="name">Restaurants / cafés / fast food</td><td class="num">190</td><td class="num">32.4% of amenity</td><td><span class="bar" style="width:14%"></span></td></tr>
+            <tr><td class="name">Gates</td><td class="num">99</td><td class="num">39.4% of barrier</td><td><span class="bar" style="width:7%"></span></td></tr>
+            <tr><td class="name">Houses</td><td class="num">95</td><td class="num">5.1%</td><td><span class="bar" style="width:7%"></span></td></tr>
+            <tr><td class="name">Apartments</td><td class="num">79</td><td class="num">4.3%</td><td><span class="bar" style="width:6%"></span></td></tr>
+            <tr><td class="name">Benches</td><td class="num">68</td><td class="num">11.6% of amenity</td><td><span class="bar" style="width:5%"></span></td></tr>
+            <tr><td class="name">Traffic signals</td><td class="num">29</td><td class="num">2.1% of highway</td><td><span class="bar" style="width:2%"></span></td></tr>
+            <tr><td class="name">Bus stops</td><td class="num">27</td><td class="num">2.0% of highway</td><td><span class="bar" style="width:2%"></span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="cat-note">
+        <strong>Two findings that shape the brief.</strong> 75% of buildings carry no type at all, so
+        the generic “urban Indian building” archetype set matters more than any specialty set. And only
+        21% record their floor count, so most heights will be inferred — facades must read correctly at
+        a height nobody authored.
+      </p>
+    </div>
+  </section>
+
+  <!-- ================= MATERIALS ================= -->
+  <section id="materials">
+    <div class="sec-head">
+      <span class="eyebrow">Deliverable 1 of 2</span>
+      <h2>Materials</h2>
+      <p>Seamless, tileable, in real-world scale. Every one needs base colour, normal, roughness,
+      and ambient occlusion. These carry the bulk of the city's surface area.</p>
+    </div>
+
+    <div class="cat" style="--dot: var(--c-building)">
+      <h3 class="cat-title"><span class="swatch"></span> Facade &amp; wall</h3>
+      <p class="cat-note">The largest visible surface in the scene. Variants exist so archetypes can differ without new geometry.</p>
+      <div class="tw"><table>
+        <thead><tr><th>Material</th><th>Variants</th><th>Priority</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Painted plaster / render</td><td class="var">10–14</td><td><span class="p p0">P0</span></td><td class="note">The dominant Indian facade. Wide colour range: white, cream, ochre, terracotta, teal, pink, faded pastels. Include clean and weathered pairs.</td></tr>
+          <tr><td class="name">Concrete, fair-faced</td><td class="var">3–4</td><td><span class="p p0">P0</span></td><td class="note">Board-formed and smooth. Staining and water streaks matter more than pristine.</td></tr>
+          <tr><td class="name">Exposed brick</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">Red clay, wire-cut, painted-over-brick.</td></tr>
+          <tr><td class="name">Ceramic / vitrified tile cladding</td><td class="var">4–6</td><td><span class="p p0">P0</span></td><td class="note">Very common on Indian mid-rise frontages. Include glossy and matte.</td></tr>
+          <tr><td class="name">Glass curtain wall</td><td class="var">4</td><td><span class="p p0">P0</span></td><td class="note">Blue-green, grey, bronze tints; mullion spacing baked into the normal.</td></tr>
+          <tr><td class="name">Granite / stone cladding</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Commercial plinths and entrance surrounds.</td></tr>
+          <tr><td class="name">Corrugated metal sheet</td><td class="var">2–3</td><td><span class="p p1">P1</span></td><td class="note">Industrial, temporary structures, rear extensions.</td></tr>
+          <tr><td class="name">Grime / weathering overlay</td><td class="var">4</td><td><span class="p p1">P1</span></td><td class="note">Blendable layer: monsoon streaking, algae at the base, dust. Applied by the shader over any facade.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="cat" style="--dot: var(--c-building)">
+      <h3 class="cat-title"><span class="swatch"></span> Roof</h3>
+      <p class="cat-note">Seen constantly from any elevated camera. Flat RCC dominates in this city.</p>
+      <div class="tw"><table>
+        <thead><tr><th>Material</th><th>Variants</th><th>Priority</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="name">RCC flat roof</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">Weathering-course tiles, bare concrete, tar-coated. The default for most buildings here.</td></tr>
+          <tr><td class="name">Clay tile, pitched</td><td class="var">2–3</td><td><span class="p p1">P1</span></td><td class="note">Mangalore tile pattern for houses and older stock.</td></tr>
+          <tr><td class="name">Metal sheet roof</td><td class="var">2</td><td><span class="p p1">P1</span></td><td class="note">Corrugated and standing-seam.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="cat" style="--dot: var(--c-road)">
+      <h3 class="cat-title"><span class="swatch"></span> Road &amp; ground</h3>
+      <p class="cat-note">One style per road class — variety here is noise, not realism.</p>
+      <div class="tw"><table>
+        <thead><tr><th>Material</th><th>Variants</th><th>Priority</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Asphalt</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">New, worn, patched-and-repaired. Patched is the most useful.</td></tr>
+          <tr><td class="name">Paver block</td><td class="var">2–3</td><td><span class="p p0">P0</span></td><td class="note">Interlocking blocks — near-universal on Indian footpaths and service roads.</td></tr>
+          <tr><td class="name">Cement footpath tile</td><td class="var">2</td><td><span class="p p0">P0</span></td><td class="note">370 footways in the sample. Include tactile paving.</td></tr>
+          <tr><td class="name">Concrete road</td><td class="var">2</td><td><span class="p p1">P1</span></td><td class="note">Panelled, with expansion joints.</td></tr>
+          <tr><td class="name">Gravel / unpaved</td><td class="var">2</td><td><span class="p p1">P1</span></td><td class="note">Service tracks, construction access.</td></tr>
+          <tr><td class="name">Bare earth / dirt</td><td class="var">2</td><td><span class="p p1">P1</span></td><td class="note">Verges, unfinished plots.</td></tr>
+          <tr><td class="name">Road markings</td><td class="var">1 set</td><td><span class="p p0">P0</span></td><td class="note">Decal sheet: lane lines, centre lines, zebra crossing, stop line, arrows, yellow box, parking bays. 162 crossings mapped.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="cat" style="--dot: var(--c-veg)">
+      <h3 class="cat-title"><span class="swatch"></span> Terrain &amp; landscape</h3>
+      <div class="tw"><table>
+        <thead><tr><th>Material</th><th>Variants</th><th>Priority</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Grass, maintained</td><td class="var">2</td><td><span class="p p0">P0</span></td><td class="note">Parks, gardens, pitches.</td></tr>
+          <tr><td class="name">Grass, dry / patchy</td><td class="var">2</td><td><span class="p p0">P0</span></td><td class="note">Bangalore's default outside monsoon.</td></tr>
+          <tr><td class="name">Soil / bare ground</td><td class="var">2</td><td><span class="p p1">P1</span></td><td class="note">Blend layer under vegetation scatter.</td></tr>
+          <tr><td class="name">Scrub ground</td><td class="var">1–2</td><td><span class="p p2">P2</span></td><td class="note">Wasteland, undeveloped plots.</td></tr>
+          <tr><td class="name">Sports surface</td><td class="var">2</td><td><span class="p p2">P2</span></td><td class="note">24 pitches mapped — synthetic turf and red clay.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="cat" style="--dot: var(--c-water)">
+      <h3 class="cat-title"><span class="swatch"></span> Water</h3>
+      <div class="tw"><table>
+        <thead><tr><th>Material</th><th>Variants</th><th>Priority</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Still water, lake</td><td class="var">1</td><td><span class="p p1">P1</span></td><td class="note">Green-brown, low clarity. Not tropical blue.</td></tr>
+          <tr><td class="name">Drain / stormwater channel</td><td class="var">1</td><td><span class="p p1">P1</span></td><td class="note">All 15 waterways in the sample are drains. Murky, with debris.</td></tr>
+          <tr><td class="name">Swimming pool</td><td class="var">1</td><td><span class="p p2">P2</span></td><td class="note">9 mapped. Tiled bottom, clean.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="cat" style="--dot: var(--c-infra)">
+      <h3 class="cat-title"><span class="swatch"></span> Shared / prop materials</h3>
+      <p class="cat-note">Applied across many small meshes. Author once, reuse everywhere.</p>
+      <div class="tw"><table>
+        <thead><tr><th>Material</th><th>Variants</th><th>Priority</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Painted metal</td><td class="var">4</td><td><span class="p p0">P0</span></td><td class="note">Railings, gates, poles, shutters. Include chipped and rusted.</td></tr>
+          <tr><td class="name">Galvanised / bare metal</td><td class="var">2</td><td><span class="p p0">P0</span></td><td class="note">Ducting, tanks, brackets.</td></tr>
+          <tr><td class="name">Glass, clear &amp; tinted</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">Windows, shopfronts, vehicle glazing.</td></tr>
+          <tr><td class="name">Plastic</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Water tanks, bins, chairs, signage.</td></tr>
+          <tr><td class="name">Wood</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Doors, benches, stall framing.</td></tr>
+          <tr><td class="name">Fabric / tarpaulin</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Awnings, stall covers, tied-down sheeting. Blue tarp is characteristic.</td></tr>
+          <tr><td class="name">Printed signage</td><td class="var">1 set</td><td><span class="p p0">P0</span></td><td class="note">Atlas of shop boards and hoardings, Kannada and English. Highly characteristic — do not skip.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- ================= MESHES ================= -->
+  <section id="meshes">
+    <div class="sec-head">
+      <span class="eyebrow">Deliverable 2 of 2</span>
+      <h2>Meshes</h2>
+      <p>Modular parts that snap onto generated walls, and props that stand on the ground.
+      Everything instanced, so keep them tight and reusable.</p>
+    </div>
+
+    <div class="cat" style="--dot: var(--c-building)">
+      <h3 class="cat-title"><span class="swatch"></span> Facade kit — placed per bay</h3>
+      <p class="cat-note">A bay is a fixed slice of wall, nominally 3&nbsp;m wide. These fill it. Author to the bay, not to a specific building.</p>
+      <div class="tw"><table>
+        <thead><tr><th>Mesh</th><th>Variants</th><th>Priority</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Window, casement</td><td class="var">5–6</td><td><span class="p p0">P0</span></td><td class="note">With frame depth and reveal. Range of proportions from square to tall.</td></tr>
+          <tr><td class="name">Window, sliding</td><td class="var">4</td><td><span class="p p0">P0</span></td><td class="note">Aluminium and UPVC. Most common on newer Indian construction.</td></tr>
+          <tr><td class="name">Window grille / security bars</td><td class="var">6–8</td><td><span class="p p0">P0</span></td><td class="note">Near-universal here and a huge character cue. Plain bars through to decorative ironwork.</td></tr>
+          <tr><td class="name">Ventilator / louvre</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Small high-set openings, bathrooms and stairwells.</td></tr>
+          <tr><td class="name">Chajja (concrete sunshade)</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">Projecting slab over windows. Defining feature of the local vernacular — its shadow line is what makes a facade read as Indian.</td></tr>
+          <tr><td class="name">Shopfront, glazed</td><td class="var">4</td><td><span class="p p0">P0</span></td><td class="note">Ground floor only. Full-height glass with a signage band above.</td></tr>
+          <tr><td class="name">Rolling shutter</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">Open, half-open, closed. Essential — most shops show one.</td></tr>
+          <tr><td class="name">Door, residential</td><td class="var">4</td><td><span class="p p0">P0</span></td><td class="note">Single and double leaf, with frame.</td></tr>
+          <tr><td class="name">Door, glass entrance</td><td class="var">2</td><td><span class="p p1">P1</span></td><td class="note">Commercial and office lobbies.</td></tr>
+          <tr><td class="name">Balcony, cantilever</td><td class="var">5–6</td><td><span class="p p0">P0</span></td><td class="note">Slab plus railing. MS railing, glass panel, and masonry parapet variants.</td></tr>
+          <tr><td class="name">Parapet / roof edge</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">Caps every flat roof. Plain, railed, perforated block.</td></tr>
+          <tr><td class="name">Plinth &amp; entrance steps</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Buildings sit above pavement level; this is the join.</td></tr>
+          <tr><td class="name">Drainpipe &amp; downspout</td><td class="var">2</td><td><span class="p p1">P1</span></td><td class="note">Runs the full height. Cheap, and its absence is noticeable.</td></tr>
+          <tr><td class="name">Electrical meter box &amp; conduit</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Exterior-mounted, ground floor. Surface cabling is normal here.</td></tr>
+          <tr><td class="name">Corner &amp; column trim</td><td class="var">2–3</td><td><span class="p p2">P2</span></td><td class="note">Pilasters and quoins for older stock.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="cat" style="--dot: var(--c-building)">
+      <h3 class="cat-title"><span class="swatch"></span> Rooftop clutter</h3>
+      <p class="cat-note">Flat roofs are the default, and an empty one reads as unfinished from any aerial view.</p>
+      <div class="tw"><table>
+        <thead><tr><th>Mesh</th><th>Variants</th><th>Priority</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Overhead water tank</td><td class="var">4–5</td><td><span class="p p0">P0</span></td><td class="note">Black plastic tank on a stand. The single most recognisable Indian rooftop object — high priority.</td></tr>
+          <tr><td class="name">Staircase headroom box</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">The small structure over the stairwell. Present on nearly every flat roof.</td></tr>
+          <tr><td class="name">Solar water heater</td><td class="var">2</td><td><span class="p p1">P1</span></td><td class="note">Panel plus cylinder. Very common in Bangalore.</td></tr>
+          <tr><td class="name">Split AC outdoor unit</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">Also wall-mounted on facades, not just roofs.</td></tr>
+          <tr><td class="name">Satellite dish</td><td class="var">2</td><td><span class="p p1">P1</span></td><td class="note">Wall and roof mounted.</td></tr>
+          <tr><td class="name">Lift machine room</td><td class="var">2</td><td><span class="p p1">P1</span></td><td class="note">Taller buildings only.</td></tr>
+          <tr><td class="name">Clothesline &amp; laundry</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Adds life. Cloth can be simple cards.</td></tr>
+          <tr><td class="name">Vent / exhaust cowl</td><td class="var">3</td><td><span class="p p2">P2</span></td><td class="note">Small scatter dressing.</td></tr>
+          <tr><td class="name">Rooftop HVAC plant</td><td class="var">3</td><td><span class="p p2">P2</span></td><td class="note">Commercial and office only.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="cat" style="--dot: var(--c-road)">
+      <h3 class="cat-title"><span class="swatch"></span> Street furniture &amp; infrastructure</h3>
+      <p class="cat-note">Counts below are mapped instances from the sample — these are placed from real data, not scattered.</p>
+      <div class="tw"><table>
+        <thead><tr><th>Mesh</th><th>Variants</th><th>Priority</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Street lamp</td><td class="var">4–5</td><td><span class="p p0">P0</span></td><td class="note">297 mapped. Single-arm, double-arm, tall highway mast, decorative park type.</td></tr>
+          <tr><td class="name">Kerb profile</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">119 mapped. Standard, dropped, and painted. Runs along every road edge.</td></tr>
+          <tr><td class="name">Gate</td><td class="var">6–8</td><td><span class="p p0">P0</span></td><td class="note">99 mapped. Compound gates: sliding, swing, ornamental ironwork, plus lift-gate barriers.</td></tr>
+          <tr><td class="name">Compound wall</td><td class="var">4</td><td><span class="p p0">P0</span></td><td class="note">Modular runs. Plain plaster, brick, railing-topped, with glass shards on top.</td></tr>
+          <tr><td class="name">Bench</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">68 mapped.</td></tr>
+          <tr><td class="name">Waste bin</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">29 mapped. Municipal and commercial.</td></tr>
+          <tr><td class="name">Bus shelter</td><td class="var">2–3</td><td><span class="p p0">P0</span></td><td class="note">27 mapped. Includes ad panel.</td></tr>
+          <tr><td class="name">Traffic signal</td><td class="var">3</td><td><span class="p p0">P0</span></td><td class="note">29 mapped. Pole, mast arm, pedestrian unit.</td></tr>
+          <tr><td class="name">Road sign set</td><td class="var">8–10</td><td><span class="p p1">P1</span></td><td class="note">Regulatory, directional, street name boards.</td></tr>
+          <tr><td class="name">Bollard</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Lane separators and pavement protection.</td></tr>
+          <tr><td class="name">Utility pole &amp; cabling</td><td class="var">4</td><td><span class="p p0">P0</span></td><td class="note">Overhead cable runs with visible sag. Defining feature of Indian streets.</td></tr>
+          <tr><td class="name">Distribution transformer</td><td class="var">2</td><td><span class="p p1">P1</span></td><td class="note">Pole-mounted and ground-mounted with cage.</td></tr>
+          <tr><td class="name">Electrical junction box</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Pavement-mounted.</td></tr>
+          <tr><td class="name">Manhole &amp; drain cover</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Can be decals where flush.</td></tr>
+          <tr><td class="name">Hoarding / billboard</td><td class="var">4</td><td><span class="p p0">P0</span></td><td class="note">Large format. Extremely prominent in Bangalore.</td></tr>
+          <tr><td class="name">Shop signboard</td><td class="var">6–8</td><td><span class="p p0">P0</span></td><td class="note">Mounted above shopfronts. Pairs with the signage material atlas.</td></tr>
+          <tr><td class="name">Awning / canopy</td><td class="var">4</td><td><span class="p p1">P1</span></td><td class="note">Fabric and metal, over shopfronts.</td></tr>
+          <tr><td class="name">ATM booth</td><td class="var">2</td><td><span class="p p2">P2</span></td><td class="note">20 mapped.</td></tr>
+          <tr><td class="name">Metro entrance</td><td class="var">2</td><td><span class="p p2">P2</span></td><td class="note">8 mapped. Canopy and stair opening.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="cat" style="--dot: var(--c-veg)">
+      <h3 class="cat-title"><span class="swatch"></span> Vegetation</h3>
+      <p class="cat-note">333 trees are individually mapped with real positions — these are placed, not scattered. Species should suit the region.</p>
+      <div class="tw"><table>
+        <thead><tr><th>Mesh</th><th>Variants</th><th>Priority</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Street tree, broadleaf</td><td class="var">6–8</td><td><span class="p p0">P0</span></td><td class="note">Rain tree, gulmohar, neem, peepal, tabebuia. Two or three sizes each.</td></tr>
+          <tr><td class="name">Palm</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Coconut and areca.</td></tr>
+          <tr><td class="name">Sapling / young tree</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">26 mapped explicitly.</td></tr>
+          <tr><td class="name">Shrub &amp; hedge</td><td class="var">5</td><td><span class="p p0">P0</span></td><td class="note">Scattered inside vegetation and garden areas.</td></tr>
+          <tr><td class="name">Grass clump</td><td class="var">4</td><td><span class="p p1">P1</span></td><td class="note">Density scatter over ground materials.</td></tr>
+          <tr><td class="name">Potted plant</td><td class="var">4</td><td><span class="p p2">P2</span></td><td class="note">Balconies, entrances, rooftops.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="cat" style="--dot: var(--c-infra)">
+      <h3 class="cat-title"><span class="swatch"></span> Street life</h3>
+      <p class="cat-note">Not in the OSM data, but scattered along roads and in parking areas. This is what separates a model of a city from a city.</p>
+      <div class="tw"><table>
+        <thead><tr><th>Mesh</th><th>Variants</th><th>Priority</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Car, parked</td><td class="var">6–8</td><td><span class="p p0">P0</span></td><td class="note">Hatchback-heavy mix, matching the local fleet.</td></tr>
+          <tr><td class="name">Two-wheeler</td><td class="var">5–6</td><td><span class="p p0">P0</span></td><td class="note">Scooters and motorcycles, parked in rows. Extremely common.</td></tr>
+          <tr><td class="name">Auto-rickshaw</td><td class="var">2–3</td><td><span class="p p0">P0</span></td><td class="note">Yellow-green. Instantly reads as Indian.</td></tr>
+          <tr><td class="name">Street vendor cart</td><td class="var">4</td><td><span class="p p1">P1</span></td><td class="note">Fruit cart, tea stall, snack cart.</td></tr>
+          <tr><td class="name">Temporary stall</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Tarpaulin and pole framing.</td></tr>
+          <tr><td class="name">Plastic chair &amp; table</td><td class="var">3</td><td><span class="p p1">P1</span></td><td class="note">Outside cafés and tea stalls. 190 food amenities mapped.</td></tr>
+          <tr><td class="name">Rubble &amp; debris pile</td><td class="var">4</td><td><span class="p p1">P1</span></td><td class="note">Construction spill, sand heaps. 14 construction sites and 8 buildings under construction mapped.</td></tr>
+          <tr><td class="name">Construction barricade</td><td class="var">3</td><td><span class="p p2">P2</span></td><td class="note">Metal sheet and striped barriers.</td></tr>
+          <tr><td class="name">Playground equipment</td><td class="var">4</td><td><span class="p p2">P2</span></td><td class="note">3 playgrounds mapped.</td></tr>
+          <tr><td class="name">Sports goal &amp; net</td><td class="var">3</td><td><span class="p p2">P2</span></td><td class="note">24 pitches mapped.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- ================= TECHNICAL ================= -->
+  <section id="technical">
+    <div class="sec-head">
+      <span class="eyebrow">Non-negotiable</span>
+      <h2>Technical requirements</h2>
+      <p>Assets that miss these will not slot into generated geometry. The bay width and pivot rules
+      matter most — everything else is standard hygiene.</p>
+    </div>
+
+    <div class="specs">
+      <div class="spec"><span class="k">Units</span><span class="v">Centimetres. <code>1&nbsp;uu = 1&nbsp;cm</code>. Real-world scale, no exceptions — the generator sizes from measured footprints.</span></div>
+      <div class="spec"><span class="k">Up axis</span><span class="v">Z-up, X-forward on export.</span></div>
+      <div class="spec"><span class="k">Pivot — facade parts</span><span class="v">Bottom-centre of the bay face, on the wall plane, so parts sit flush when placed.</span></div>
+      <div class="spec"><span class="k">Pivot — ground props</span><span class="v">Base centre, resting on <code>Z&nbsp;=&nbsp;0</code>.</span></div>
+      <div class="spec"><span class="k">Bay width</span><span class="v">Facade parts author to a <code>3&nbsp;m</code> nominal bay, and must tolerate ±15% squash without visible distortion.</span></div>
+      <div class="spec"><span class="k">Floor height</span><span class="v"><code>3.2&nbsp;m</code> nominal. Windows and chajjas must sit correctly within it.</span></div>
+      <div class="spec"><span class="k">Texel density</span><span class="v"><code>512&nbsp;px/m</code> for facade parts and hero props; <code>256&nbsp;px/m</code> for background and scatter.</span></div>
+      <div class="spec"><span class="k">Tiling materials</span><span class="v">Seamless in both axes, authored at <code>2×2&nbsp;m</code> or <code>4×4&nbsp;m</code> real-world coverage. State the coverage in the filename.</span></div>
+      <div class="spec"><span class="k">UVs</span><span class="v">UV0 unwrapped, no overlap for opaque. UV1 lightmap only where the asset is not Nanite.</span></div>
+      <div class="spec"><span class="k">Nanite</span><span class="v">Enable wherever eligible. Instance counts run to tens of thousands, well past the threshold.</span></div>
+      <div class="spec"><span class="k">LODs</span><span class="v">Only for non-Nanite assets — foliage and anything with translucency. Three levels.</span></div>
+      <div class="spec"><span class="k">Material slots</span><span class="v">One per distinct material, kept to a minimum. Instanced props should ideally use a single slot.</span></div>
+      <div class="spec"><span class="k">Collision</span><span class="v">Simple primitives on ground props. None on facade parts — the building shell carries it.</span></div>
+    </div>
+
+    <div class="callout">
+      <p><strong>Naming.</strong> <code class="mono">SM_[Category]_[Item]_[Variant]</code> for meshes,
+      <code class="mono">M_[Category]_[Item]_[Variant]</code> for materials, and
+      <code class="mono">T_[Name]_[BC|N|ORM]</code> for textures. Example:
+      <code class="mono">SM_Facade_WindowGrille_04</code>, <code class="mono">M_Wall_PlasterPainted_Ochre</code>.</p>
+      <p>Variants of one item must be interchangeable — same pivot, same footprint, same slot count —
+      because the generator swaps between them by ratio without inspecting the mesh.</p>
+    </div>
+  </section>
+
+  <!-- ================= EXCLUSIONS ================= -->
+  <section id="exclusions">
+    <div class="sec-head">
+      <span class="eyebrow">Do not build</span>
+      <h2>Explicitly out of scope</h2>
+      <p>Time spent on these is wasted — the generator produces them, or does not use them.</p>
+    </div>
+    <div class="excl">
+      <div><b>Whole buildings</b><span>Generated from footprint and height. A modelled building cannot fit a footprint it was not modelled for.</span></div>
+      <div><b>Road meshes</b><span>Swept along the real spline at the real width. Supply the surface material only.</span></div>
+      <div><b>Terrain meshes</b><span>Built from elevation data. Supply ground materials only.</span></div>
+      <div><b>Pre-assembled facades</b><span>Assembled per bay at generation time. Supply the individual parts.</span></div>
+      <div><b>Site-specific landmarks</b><span>Not yet — the pipeline places nothing by name. Revisit once hero buildings are on the roadmap.</span></div>
+      <div><b>Interiors</b><span>Out of scope entirely. Windows can be opaque with an interior-parallax material.</span></div>
+    </div>
+  </section>
+
+  <footer>
+    Quantities measured from two cached Bangalore regions (UB City, Indiranagar), 1&nbsp;km² each:
+    1,850 tagged buildings, 1,379 highway elements, 587 amenities, 382 natural features, 251 barriers.
+    Priorities follow observed frequency. Variant counts are recommendations — the generator accepts
+    any number per category and selects by configurable ratio.
+  </footer>
+</div>
