@@ -10,6 +10,8 @@
 #include "Fetch/FOSMNominatimClient.h"
 #include "Region/FOSMRegion.h"
 #include "Validation/FOSMImportReport.h"
+#include "Graph/FOSMGraphBuilder.h"
+#include "UObject/StrongObjectPtr.h"
 
 class SWidget;
 
@@ -116,6 +118,17 @@ public:
         /** Structured outcome of the last import run. Drives the summary step. */
         FOSMImportReport ImportReport;
         bool bHasImportReport = false;
+
+        /**
+         * The city graph built from the last accepted import (plan_v3_pipeline.md Phase 2).
+         *
+         * A strong pointer because the wizard is a Slate widget, not a UObject, so it is not
+         * part of the reference graph the collector walks — without this the graph would be
+         * collected out from under the summary that is displaying it.
+         */
+        TStrongObjectPtr<UOSMCityGraph> CityGraph;
+        FOSMGraphReport GraphReport;
+        bool bHasGraph = false;
     };
 
     /** Opens the wizard window in Unreal Editor */

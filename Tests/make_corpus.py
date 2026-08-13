@@ -30,7 +30,7 @@ REGION = dict(min_lat=12.9700, max_lat=12.9800, min_lon=77.6020, max_lon=77.6120
 # OSM fixtures
 # ---------------------------------------------------------------------------
 
-def read_elements(path, max_ways, lat_range=None):
+def read_elements(path, max_ways, bounds=None):
     """
     Pull a bounded subset of ways, plus exactly the nodes they reference.
 
@@ -53,41 +53,85 @@ def read_elements(path, max_ways, lat_range=None):
 
             if "<way " in line:
                 way_match = re.search(r'<way id="(\d+)"', line)
-                current_way = [int(way_match.group(1)), []] if way_match else None
+                current_way = [int(way_match.group(1)), [], {}] if way_match else None
             elif current_way is not None and "<nd ref=" in line:
                 current_way[1].append(int(re.search(r'ref="(\d+)"', line).group(1)))
+            elif current_way is not None and "<tag " in line:
+                tag_match = re.search(r'<tag k="([^"]*)" v="([^"]*)"', line)
+                if tag_match:
+                    current_way[2][tag_match.group(1)] = tag_match.group(2)
             elif current_way is not None and "</way>" in line:
                 if len(current_way[1]) >= 2:
                     all_ways.append(tuple(current_way))
                 current_way = None
 
+    # Balanced across categories rather than "the first N ways".
+    #
+    # Taking the first N produced an all-roads fixture, which meant the FrontsOnto and Contains
+    # tests ran against a graph containing no buildings and no zones — they passed without
+    # exercising anything. A fixture has to contain the things the tests claim to check.
+    quota_keys = ("building", "highway", "landuse", "leisure", "natural", "waterway", "amenity")
+    per_category = max(1, max_ways // len(quota_keys))
+    taken = {key: 0 for key in quota_keys}
+    taken["other"] = 0
+
+    def category_of(tags):
+        for key in quota_keys:
+            if key in tags:
+                return key
+        return "other"
+
     ways, used_ids = [], set()
-    for way_id, refs in all_ways:
+    for way_id, refs, tags in all_ways:
         if len(ways) >= max_ways:
             break
         if not all(ref in all_nodes for ref in refs):
             continue
-        if lat_range and not all(lat_range[0] <= all_nodes[ref][0] <= lat_range[1] for ref in refs):
+        # Both axes. Filtering latitude alone let ways through that sat outside the region's
+        # longitude, so the import clipped them away and the fixture silently lost most of its
+        # categories — the graph ended up with no buildings at all.
+        if bounds and not all(
+                bounds["min_lat"] <= all_nodes[ref][0] <= bounds["max_lat"]
+                and bounds["min_lon"] <= all_nodes[ref][1] <= bounds["max_lon"]
+                for ref in refs):
             continue
-        ways.append((way_id, refs))
+
+        category = category_of(tags)
+        if category == "other" or taken[category] >= per_category:
+            continue
+
+        taken[category] += 1
+        ways.append((way_id, refs, tags))
         used_ids.update(refs)
 
     nodes = [(node_id, all_nodes[node_id][0], all_nodes[node_id][1]) for node_id in sorted(used_ids)]
     return nodes, ways
 
 
-def write_osm(path, nodes, ways, tagged_ways=True):
+def read_all_nodes(path):
+    """Every node in a file, unfiltered — the extremes are the point, not a sample of them."""
+    nodes = []
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            match = re.search(r'<node id="(\d+)"[^>]*lat="([-\d.]+)"[^>]*lon="([-\d.]+)"', line)
+            if match:
+                nodes.append((int(match.group(1)), float(match.group(2)), float(match.group(3))))
+    return nodes
+
+
+def write_osm(path, nodes, ways):
+    """Ways are (id, node_refs, tags); tags are written verbatim so classification is real."""
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<osm version="0.6" generator="OSMWorldGen test corpus">',
     ]
     for node_id, lat, lon in nodes:
         parts.append(f'  <node id="{node_id}" lat="{lat:.7f}" lon="{lon:.7f}"/>')
-    for way_id, refs in ways:
+    for way_id, refs, tags in ways:
         parts.append(f'  <way id="{way_id}">')
         parts.extend(f'    <nd ref="{ref}"/>' for ref in refs)
-        if tagged_ways:
-            parts.append('    <tag k="highway" v="residential"/>')
+        for key, value in sorted(tags.items()):
+            parts.append(f'    <tag k="{key}" v="{value}"/>')
         parts.append("  </way>")
     parts.append("</osm>")
 
@@ -102,9 +146,7 @@ def build_osm_fixtures(cache_dir):
     wide_source = os.path.join(cache_dir, "59bf65474deb2a062e9411ca6e910a6d", "region.osm")
 
     # 1. Baseline: a clean, in-region file that must be accepted.
-    nodes, ways = read_elements(
-        small_source, max_ways=40,
-        lat_range=(REGION["min_lat"], REGION["max_lat"]))
+    nodes, ways = read_elements(small_source, max_ways=40, bounds=REGION)
     valid_body = write_osm(os.path.join(DATA, "valid_small.osm"), nodes, ways)
 
     # 2. The 40 km way, reproducing the file that produced a 500 km landscape.
@@ -114,12 +156,13 @@ def build_osm_fixtures(cache_dir):
     #    is a different defect from the one being tested. What broke generation was a file that
     #    legitimately covers the region and *also* contains one way running far outside it —
     #    Overpass returns the full geometry of any way merely overlapping the query box.
-    wide_all_nodes, _ = read_elements(wide_source, max_ways=10_000)
-    far_nodes = sorted(wide_all_nodes, key=lambda n: n[1])  # by latitude
+    #    Read every node rather than a category-quota'd subset: the fixture's whole purpose is
+    #    the extreme span, and sampling would quietly shrink it.
+    far_nodes = sorted(read_all_nodes(wide_source), key=lambda n: n[1])  # by latitude
     escaping = [far_nodes[0], far_nodes[len(far_nodes) // 2], far_nodes[-1]]
 
     oversized_nodes = list(nodes) + escaping
-    oversized_ways = list(ways) + [(999999002, [n[0] for n in escaping])]
+    oversized_ways = list(ways) + [(999999002, [n[0] for n in escaping], {"highway": "trunk"})]
     write_osm(os.path.join(DATA, "oversized_way.osm"), oversized_nodes, oversized_ways)
 
     span_km = (escaping[-1][1] - escaping[0][1]) * 111.32
@@ -136,7 +179,7 @@ def build_osm_fixtures(cache_dir):
 
     # 5. A way pointing at a node that is not in the file. Legitimate at a region boundary,
     #    so this must warn rather than reject.
-    dangling_ways = list(ways[:-1]) + [(999999001, [nodes[0][0], 888888888])]
+    dangling_ways = list(ways[:-1]) + [(999999001, [nodes[0][0], 888888888], {"highway": "residential"})]
     write_osm(os.path.join(DATA, "dangling_refs.osm"), nodes, dangling_ways)
 
     # 6/7. Degenerate inputs that must fail cleanly rather than crash.
@@ -144,7 +187,12 @@ def build_osm_fixtures(cache_dir):
     with open(os.path.join(DATA, "not_osm.osm"), "w", encoding="utf-8", newline="\n") as handle:
         handle.write('<?xml version="1.0" encoding="UTF-8"?>\n<html><body>Not OSM data at all.</body></html>\n')
 
-    print(f"  valid_small.osm       {len(nodes)} nodes, {len(ways)} ways")
+    from collections import Counter
+    mix = Counter(
+        next((k for k in ("building", "highway", "landuse", "leisure", "natural", "waterway", "amenity")
+              if k in tags), "other")
+        for _, _, tags in ways)
+    print(f"  valid_small.osm       {len(nodes)} nodes, {len(ways)} ways  {dict(mix)}")
 
 
 # ---------------------------------------------------------------------------

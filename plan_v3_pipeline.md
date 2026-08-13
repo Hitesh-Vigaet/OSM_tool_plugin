@@ -347,12 +347,46 @@ silently dropped** — invisible dropping is how "where did my water go?" happen
 
 ### 2.7 Acceptance criteria
 
-- [ ] Every classified feature becomes a node or a reported rejection — nothing vanishes
-- [ ] Node/edge counts match expected values for the test corpus
-- [ ] Graph saves and reloads with identical content
-- [ ] Same input + seed ⇒ identical graph (hash comparison)
-- [ ] Zero geometry outside the region bbox
-- [ ] Build completes with **no actors spawned**
+- [x] Every classified feature becomes a node or a reported rejection — nothing vanishes
+- [x] Node/edge counts match expected values for the test corpus
+- [ ] Graph saves and reloads with identical content — *deferred to Phase 3, see below*
+- [x] Same input + seed ⇒ identical graph (hash comparison)
+- [x] Zero geometry outside the region bbox (within the shared clip margin)
+- [x] Build completes with **no actors spawned**
+
+**Status: complete except asset round-trip.** 14 automation tests pass, exit code 0.
+
+| Task | Where |
+|---|---|
+| 2.1 Storage | `Core/Public/Graph/FOSMGeometryStore.h`, `UOSMCityGraph.h` |
+| 2.2 Node builders | `FOSMGraphBuilder::BuildNodes` — 11 node types mapped from classification |
+| 2.3 Topology | `BuildTopology` — junctions by shared coordinate, `SharesNode` + `ConnectsTo` |
+| 2.4 Spatial | `BuildSpatial` — `Contains` (point-in-polygon, hole-aware), `FrontsOnto` (uniform grid) |
+| 2.5 Grouping | `BuildGroups` — category groups + name-based corridors |
+| 2.6 Validation | `ValidateGraph` + `FOSMGraphReport` |
+
+Three decisions made during implementation:
+
+- **`EOSMRelationshipType`, not `EOSMRelationType`** — the latter already exists for OSM relation
+  members. Two different concepts with one name is how the wrong enum gets used.
+- **One shared clip margin.** Feature clipping padded by 25% of the region (250 m on a 1 km region)
+  while the graph validator demanded zero, so a correctly clipped import produced a graph that
+  failed its own validation. Now `OSMRegionLimits::ClipMarginDegrees` (~111 m, matching the Overpass
+  node padding) is the single number the fetch, the clip and the validator all agree on.
+- **Distances without a projection.** Metres are derived by scaling degrees at the region's centre
+  latitude. Over a 5 km-capped region the error is under a metre, and it keeps the graph free of any
+  projection choice — baking one in is what made the old pipeline impossible to re-inspect.
+
+**Asset round-trip is deferred.** `UOSMCityGraph` is a `UObject` with fully `UPROPERTY`-serialised
+state, so it *can* be saved; nothing yet creates a package for it, because nothing needs to reopen a
+graph until the Control Center exists. Phase 3.1 should add the save/load path and the round-trip
+test together, so the test covers a code path something actually uses.
+
+**The corpus caught two fixture defects** that would have made these tests theatre: the baseline was
+initially roads-only, so `FrontsOnto` and `Contains` passed against a graph containing no buildings;
+and the fixture filtered by latitude alone, so most features fell outside the region's longitude and
+were clipped away at import. Both are fixed — the baseline is now category-balanced and filtered on
+both axes, and the graph it produces contains buildings, roads, junctions, vegetation and zones.
 
 ---
 

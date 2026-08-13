@@ -29,6 +29,8 @@
 #include "Fetch/FOSMOverpassClient.h"
 #include "Fetch/FOSMOpenTopographyClient.h"
 #include "Settings/UOSMWorldGenSettings.h"
+#include "Graph/FOSMGraphBuilder.h"
+#include "Graph/UOSMCityGraph.h"
 #include "HAL/PlatformProcess.h"
 #include "Widgets/SWindow.h"
 #include "Async/Async.h"
@@ -1121,6 +1123,41 @@ FReply SOSMImportWizard::OnStartGeneration()
     State.GeoOrigin = State.Region.GetGeoOrigin();
     State.ImportSummary = State.ImportReport.ToDisplayString();
     State.GeneratedActorCount = 0;
+
+    // ---- Phase 2: build the city graph from the validated features ----
+    //
+    // Only on an accepted import. Building a graph from data that failed its gates would defeat
+    // the point of having gates, and would put the defect one layer further from where it can
+    // be understood.
+    State.CityGraph.Reset();
+    State.bHasGraph = false;
+
+    if (State.ImportReport.IsAccepted())
+    {
+        State.StatusText = FText::FromString(TEXT("Building city graph..."));
+        State.ProgressPercent = 0.7f;
+
+        FOSMGraphBuildOptions GraphOptions;
+
+        UOSMCityGraph* Graph = FOSMGraphBuilder::Build(
+            FeatureTable, State.Region, GraphOptions, GetTransientPackage(), State.GraphReport);
+
+        if (Graph)
+        {
+            Graph->SourceOSMFile = State.OSMFilePath;
+            Graph->SourceDEMFile = State.DEMFilePath;
+            State.CityGraph.Reset(Graph);
+            State.bHasGraph = true;
+
+            State.ImportSummary += TEXT("\n\n")
+                TEXT("------------------------------------------------------------\n")
+                + State.GraphReport.ToDisplayString()
+                + TEXT("\n\n") + Graph->ToSummaryString();
+
+            UE_LOG(LogTemp, Log, TEXT("City graph report:\n%s\n\n%s"),
+                *State.GraphReport.ToDisplayString(), *Graph->ToSummaryString());
+        }
+    }
 
     // Full findings go to the log — including Info-level ones the summary omits — so a
     // support question can be answered from a log paste alone.

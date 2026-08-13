@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Model/FOSMFeature.h"
 #include "Model/EOSMFeatureType.h"
+#include "Region/FOSMRegion.h"
 #include "FOSMFeatureTable.generated.h"
 
 /**
@@ -63,19 +64,22 @@ struct OSMWORLDGENCORE_API FOSMFeatureTable
 
     /**
      * Restrict this table to a geographic region. Call before adding any features.
-     * PaddingFraction extends the region each point is clamped into (0.25 = clamp box is
-     * 50% wider/taller than the requested region) so geometry right at the edge of the
-     * request isn't flattened onto the exact boundary line.
+     *
+     * MarginDegrees is an ABSOLUTE allowance, not a fraction of the region. It used to be a
+     * fraction (0.25), which meant the permitted overhang scaled with the request — 250 m on a
+     * 1 km region — and silently disagreed with the graph validator's expectation that nothing
+     * lies outside the region at all. The margin exists so a building straddling the boundary
+     * stays whole rather than being flattened onto the boundary line; it does not need to grow
+     * with the region, because buildings do not.
      */
-    void SetClipBounds(double MinLat, double MinLon, double MaxLat, double MaxLon, double PaddingFraction = 0.25)
+    void SetClipBounds(double MinLat, double MinLon, double MaxLat, double MaxLon,
+                       double MarginDegrees = OSMRegionLimits::ClipMarginDegrees)
     {
         ClipMinLatLon = FVector2D(MinLat, MinLon);
         ClipMaxLatLon = FVector2D(MaxLat, MaxLon);
 
-        const double PadLat = (MaxLat - MinLat) * PaddingFraction;
-        const double PadLon = (MaxLon - MinLon) * PaddingFraction;
-        PaddedClipMinLatLon = FVector2D(MinLat - PadLat, MinLon - PadLon);
-        PaddedClipMaxLatLon = FVector2D(MaxLat + PadLat, MaxLon + PadLon);
+        PaddedClipMinLatLon = FVector2D(MinLat - MarginDegrees, MinLon - MarginDegrees);
+        PaddedClipMaxLatLon = FVector2D(MaxLat + MarginDegrees, MaxLon + MarginDegrees);
 
         bHasClipBounds = true;
     }

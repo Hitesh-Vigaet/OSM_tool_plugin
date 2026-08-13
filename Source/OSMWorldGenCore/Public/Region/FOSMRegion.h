@@ -20,6 +20,19 @@ namespace OSMRegionLimits
 
     /** Mean meridional degree length. Good to ~0.1% for city-scale extents. */
     static constexpr double KmPerDegreeLat = 111.32;
+
+    /**
+     * How far outside the region geometry is allowed to extend, in degrees (~111 m).
+     *
+     * A single shared number, because two independent ones disagreed: feature clipping padded
+     * by 25% of the region (250 m on a 1 km region) while the graph validator demanded zero,
+     * so a correctly clipped import produced a graph that failed its own validation.
+     *
+     * A margin rather than zero so that a building straddling the boundary stays whole instead
+     * of being flattened onto the boundary line. It matches the Overpass node padding, so the
+     * fetch, the clip and the validator all agree on where the edge is.
+     */
+    static constexpr double ClipMarginDegrees = 0.001;
 }
 
 /**
