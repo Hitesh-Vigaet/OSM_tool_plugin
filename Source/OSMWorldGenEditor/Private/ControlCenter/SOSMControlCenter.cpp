@@ -248,6 +248,21 @@ TSharedRef<SWidget> SOSMControlCenter::BuildHeader()
             + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
             [
                 SNew(SButton)
+                .Text_Lambda([this]()
+                {
+                    return bShowTerrain
+                        ? LOCTEXT("TerrainOn", "Ground: Shown")
+                        : LOCTEXT("TerrainOff", "Ground: Hidden");
+                })
+                .ToolTipText(LOCTEXT("TerrainTip",
+                    "Draw the DEM surface as a ground grid beneath the city."))
+                .IsEnabled_Lambda([this]() { return bHasDEM; })
+                .OnClicked(this, &SOSMControlCenter::OnToggleTerrain)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
+            [
+                SNew(SButton)
                 .Text(LOCTEXT("ToggleRelationships", "Toggle Relationship Lines"))
                 .OnClicked(this, &SOSMControlCenter::OnToggleRelationships)
             ]
@@ -1019,6 +1034,10 @@ void SOSMControlCenter::RefreshOverlay()
             GetDrapeHeightCm(LatLon) + ZOffset);
     };
 
+    // Ground first, city on top — both so the draw order matches how the scene reads, and so
+    // the terrain is visible as the thing everything else is snapped to.
+    DrawTerrainGrid(World, ToWorld);
+
     for (const FOSMGraphNode& Node : Graph->Nodes)
     {
         if (!IsNodeTypeVisible(Node.Type)) continue;
@@ -1029,7 +1048,9 @@ void SOSMControlCenter::RefreshOverlay()
 
         // Slight Z separation per category so overlapping features stay distinguishable, and
         // the selected node draws above everything.
-        const double ZOffset = bSelected ? 300.0 : 20.0 * static_cast<double>(Node.Type);
+        // Lifted clear of the terrain grid so outlines are not z-fighting the ground, with a
+        // small per-category separation on top so overlapping features stay distinguishable.
+        const double ZOffset = bSelected ? 800.0 : 150.0 + 20.0 * static_cast<double>(Node.Type);
 
         if (Node.Type == EOSMNodeType::Junction || !Node.HasGeometry())
         {
@@ -1109,6 +1130,66 @@ FReply SOSMControlCenter::OnToggleDrape()
     bDrapeOnTerrain = !bDrapeOnTerrain;
     RefreshOverlay();
     return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnToggleTerrain()
+{
+    bShowTerrain = !bShowTerrain;
+    RefreshOverlay();
+    return FReply::Handled();
+}
+
+// ---------------------------------------------------------------------------
+void SOSMControlCenter::DrawTerrainGrid(UWorld* World, const TFunction<FVector(const FVector2D&, double)>& ToWorld)
+{
+    if (!World || !bHasDEM || !bShowTerrain)
+    {
+        return;
+    }
+
+    const FOSMGeoTIFFTile& Tile = DEMSampler.GetTileMetadata();
+    if (Tile.Width < 2 || Tile.Height < 2)
+    {
+        return;
+    }
+
+    // Muted olive-grey. The ground must read as ground: a saturated colour here would compete
+    // with the feature palette, and the point of drawing it is to make the CITY legible against
+    // a surface, not to look at the surface.
+    const FColor TerrainColour(96, 104, 84);
+
+    // A dense raster would emit tens of thousands of segments and bury the city in wireframe.
+    // Capping the drawn resolution keeps the surface readable at any DEM size; the sampling
+    // underneath the city is unaffected, since that reads the raster directly.
+    constexpr int32 MaxGridLines = 64;
+    const int32 StepX = FMath::Max(1, Tile.Width / MaxGridLines);
+    const int32 StepY = FMath::Max(1, Tile.Height / MaxGridLines);
+
+    auto SampleAt = [&](int32 Col, int32 Row)
+    {
+        const double Lat = Tile.PixelToLat(static_cast<double>(Row));
+        const double Lon = Tile.PixelToLon(static_cast<double>(Col));
+        return ToWorld(FVector2D(Lat, Lon), 0.0);
+    };
+
+    // Rows then columns, so the grid reads as a surface rather than a set of contour lines.
+    for (int32 Row = 0; Row < Tile.Height; Row += StepY)
+    {
+        for (int32 Col = 0; Col + StepX < Tile.Width; Col += StepX)
+        {
+            DrawDebugLine(World, SampleAt(Col, Row), SampleAt(Col + StepX, Row),
+                TerrainColour, /*bPersistent*/ true, /*LifeTime*/ -1.0f, /*DepthPriority*/ 0, 1.0f);
+        }
+    }
+
+    for (int32 Col = 0; Col < Tile.Width; Col += StepX)
+    {
+        for (int32 Row = 0; Row + StepY < Tile.Height; Row += StepY)
+        {
+            DrawDebugLine(World, SampleAt(Col, Row), SampleAt(Col, Row + StepY),
+                TerrainColour, /*bPersistent*/ true, /*LifeTime*/ -1.0f, /*DepthPriority*/ 0, 1.0f);
+        }
+    }
 }
 
 FReply SOSMControlCenter::OnToggleRelationships()

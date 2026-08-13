@@ -114,6 +114,18 @@ private:
 
     FReply OnToggleDrape();
 
+    /**
+     * Draw the DEM surface itself as a ground grid, beneath everything else.
+     *
+     * Without it the city is snapped to a surface that cannot be seen, so "is it following the
+     * terrain?" is unanswerable by looking — which is the question the overlay exists to answer.
+     */
+    bool bShowTerrain = true;
+    FReply OnToggleTerrain();
+
+    /** Draw the DEM as a wireframe ground surface. Called first, so the city sits on top of it. */
+    void DrawTerrainGrid(class UWorld* World, const TFunction<FVector(const FVector2D&, double)>& ToWorld);
+
     /** Redraw handle so the overlay can be cleared without clearing everyone else's lines. */
     bool bOverlayActive = false;
 
