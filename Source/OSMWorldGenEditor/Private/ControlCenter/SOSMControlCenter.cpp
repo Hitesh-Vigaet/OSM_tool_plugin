@@ -5,6 +5,7 @@
 #include "Scene/FOSMSceneSetup.h"
 #include "Session/FOSMGraphSession.h"
 #include "Generation/FOSMDryRunReport.h"
+#include "Generation/FOSMWorldBuilder.h"
 #include "Engine/StaticMesh.h"
 #include "Generation/UOSMBuildingArchetype.h"
 #include "PropertyCustomizationHelpers.h"
@@ -303,6 +304,26 @@ TSharedRef<SWidget> SOSMControlCenter::BuildHeader()
             + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
             [
                 SNew(SButton)
+                .Text(LOCTEXT("BuildCity", "Build City"))
+                .ToolTipText(LOCTEXT("BuildCityTip",
+                    "Generate the city as flat-coloured geometry: grey buildings, dark roads, green "
+                    "vegetation, blue water.\nReplaces anything a previous build created."))
+                .IsEnabled_Lambda([this]() { return Graph.IsValid(); })
+                .OnClicked(this, &SOSMControlCenter::OnBuildCity)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("ClearCity", "Clear City"))
+                .ToolTipText(LOCTEXT("ClearCityTip",
+                    "Remove every actor the builder created. Nothing else in the level is touched."))
+                .OnClicked(this, &SOSMControlCenter::OnClearCity)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
+            [
+                SNew(SButton)
                 .Text(LOCTEXT("DryRun", "Dry Run"))
                 .ToolTipText(LOCTEXT("DryRunTip",
                     "Report exactly what generation would produce — counts, assets, ratios, "
@@ -333,6 +354,36 @@ FReply SOSMControlCenter::OnSetUpScene()
 
     // The overlay is cleared by level changes, so redraw once the environment exists.
     RefreshOverlay();
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnBuildCity()
+{
+    if (!Graph.IsValid())
+    {
+        DryRunText = TEXT("No graph loaded.");
+        return FReply::Handled();
+    }
+
+    FOSMWorldBuilder::FOptions Options;
+    Options.bUseTerrain = bHasDEM;
+
+    const FOSMWorldBuilder::FResult BuildResult = FOSMWorldBuilder::Build(*Graph, Region, Options);
+    DryRunText = BuildResult.ToString();
+
+    UE_LOG(LogTemp, Log, TEXT("OSM build: %s"), *DryRunText);
+
+    // The debug overlay would sit inside the geometry it describes, so it is cleared once real
+    // meshes exist. Redraw Overlay brings it back when wanted.
+    ClearOverlay();
+
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnClearCity()
+{
+    const int32 Removed = FOSMWorldBuilder::Clear();
+    DryRunText = FString::Printf(TEXT("Removed %d generated actor(s)."), Removed);
     return FReply::Handled();
 }
 

@@ -32,6 +32,8 @@ public class OSMWorldGenEditor : ModuleRules
             "Json",
             "DeveloperSettings",
             "ApplicationCore",
+            "ProceduralMeshComponent",  // grey-box city geometry
+            "GeometryCore",             // PolygonTriangulation for area surfaces
         });
     }
 }

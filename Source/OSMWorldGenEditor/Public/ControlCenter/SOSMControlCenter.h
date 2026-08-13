@@ -181,6 +181,11 @@ private:
     /** Report what generation would produce, without producing any of it. */
     FReply OnDryRun();
 
+    /** Build the city into the level as flat-coloured geometry. */
+    FReply OnBuildCity();
+    /** Remove everything the builder created, leaving the rest of the level alone. */
+    FReply OnClearCity();
+
     /** Last dry-run output, shown in the issues panel area. */
     FString DryRunText;
 
