@@ -541,6 +541,144 @@ allocated directly. Most PCG material still shows the old form.
 
 ## Phase 5 — Generation (only after 1–4 are signed off)
 
+### 5.1 Archetypes: variety comes from many procedural recipes per subtype
+
+Decided with the user. A building is generated from an **archetype** — a parameterised recipe —
+not from a mesh. Each subtype carries a library of 10–20 archetypes that differ in facade
+material, window pattern and spacing, floor height, roof form, plinth, trim and colour range.
+Selection picks an archetype by ratio *within that subtype*, then the extruder applies it to the
+building's own footprint and height.
+
+This is what makes variety and correctness compatible. A mesh library must choose between fitting
+the footprint and looking different; an archetype library does both, because the shape comes from
+the data and the character comes from the recipe.
+
+```
+Buildings ─┬─ commercial   ─ 15 archetypes ─ ratio ─▶ archetype ─┐
+           ├─ residential  ─ 20 archetypes ─ ratio ─▶ archetype ─┼─▶ extrude(footprint, height)
+           ├─ apartments   ─ 12 archetypes ─ ratio ─▶ archetype ─┤
+           └─ industrial   ─  8 archetypes ─ ratio ─▶ archetype ─┘
+```
+
+`FOSMAssetRule` already supports per-subtype rules (`FindRule` prefers an exact subtype match over
+the type-wide one). Only the Control Center needs extending: it currently creates type-wide rules
+only, so it needs subtype rows.
+
+**`UOSMBuildingArchetype`** (new data asset), parameters roughly:
+
+| Group | Parameters |
+|---|---|
+| Massing | floor height, setback rules, roof form (flat/hip/gable/parapet), roof pitch |
+| Facade | wall material set, trim material, plinth height + material, corner treatment |
+| Openings | window mesh *or* material, bay width, sill height, per-floor pattern, ground-floor override |
+| Variation | colour/roughness jitter ranges, driven by the node seed so it stays deterministic |
+
+Ground floors get their own treatment: a commercial street reads wrongly if shopfronts are
+identical to the floors above.
+
+### 5.2 The extruder
+
+`FOSMBuildingMesher`: footprint polygon + height + archetype → mesh.
+
+- Walls extruded per edge, subdivided into **bays** so window spacing stays constant rather than
+  stretching with the wall — the failure that makes scaled meshes look wrong.
+- UVs in **world metres**, so a material tiles identically on a 20 m² hut and a 7,800 m² block.
+- Floors from `height / archetype.FloorHeight`, so storey lines land where they should.
+- Roof from the same polygon, triangulated; 95% of footprints are near-rectangular, and the rest
+  cap out at 34 vertices.
+- Holes (courtyards) come through as inner rings, which the geometry store already carries.
+
+### 5.3 Linear and area features: usually one style per subtype
+
+Per the user: roads do not need 20 variants. `highway=residential` gets one tarmac style,
+`highway=track` gets one gravel style. The ratio machinery stays available but will normally hold
+a single entry.
+
+| Feature | Generated as | Style holds |
+|---|---|---|
+| RoadSegment | mesh swept along spline at its width | surface material, lane markings, kerb profile |
+| Waterway / Railway | swept mesh | material + profile |
+| WaterBody | surface at polygon, at DEM height | water material |
+| VegetationArea / LeisureArea | PCG scatter inside polygon, roads and buildings excluded | tree/shrub **meshes** + density |
+| LanduseZone | ground material blend | material |
+| Amenity | point instance | prop **mesh** |
+
+Scatter and props are where actual meshes belong — no footprint to conform to.
+
+### 5.4 Small parts: library or procedural, decided per part
+
+The user is content either way provided the result is realistic. The sensible split:
+
+- **Meshes** for things with real depth read close up: window frames, doors, balconies, AC units,
+  railings. Cheap to instance, and hand-authored geometry beats a shader here.
+- **Materials** for flat detail: brickwork, plaster, concrete, glass, signage. Parallax and
+  normal maps carry these at any distance without geometry cost.
+
+A bay is then a small mesh kit placed on a generated wall, which keeps instance counts sane while
+letting facades read properly at street level.
+
+### 5.5 Height source chain
+
+Height decides whether a city reads correctly, and OSM's coverage is patchy. Resolved in order,
+with the source recorded on the node so the Control Center can show where each number came from:
+
+1. **Google Open Buildings 2.5D Temporal** (see 5.6) — measured, where covered and reliable
+2. `height` tag — explicit metres
+3. `building:levels` x archetype floor height
+4. Archetype default for the subtype — flagged, so guessed heights are visible
+
+### 5.6 Google Open Buildings 2.5D Temporal — verified feasible
+
+Investigated at the user's request. **It is usable, and cheaper than expected.** Every fact below
+was checked against the live service, not recalled.
+
+**What it is** (from Google's dataset page): annual rasters 2016–2023 with three bands — building
+presence, building height, fractional building count — from Sentinel-2, ~4 m effective resolution,
+covering Africa, South Asia, South-East Asia, Latin America. **India is in the coverage list**, so
+Bangalore is served.
+
+**Access, verified live:**
+
+- Bucket `open-buildings-temporal-data` is **public over plain HTTPS — no Earth Engine account,
+  no auth**. The documented colab uses `storage.Client`, but the same objects fetch with a plain
+  GET.
+- Layout: `v1/manifests/<s2cell>_EPSG_<utm>_<year>_06_30.json` and `v1/geotiffs/<cell>_<year>/tile_*.tif`.
+- Manifests give each tile's affine transform and dimensions, so bbox → tile selection is a
+  containment test, no S2 maths required.
+- Bangalore falls in `EPSG:32643` (UTM 43N); manifests `39_` and `3b_` cover it.
+
+**The size problem, and why it is not one:** a tile is 25000 x 25000 px at 0.5 m — 12.5 km across,
+**108 MB** — to serve a 1 km² region. But the tiles are internally **512 x 512 tiled, Deflate
+compressed, 7203 tiles per file**. That is a Cloud-Optimized layout, so HTTP **Range requests**
+fetch only the ~25 internal tiles a 1 km² region touches: **roughly 400 KB instead of 108 MB.**
+
+**Work required, honestly scoped:**
+
+| | |
+|---|---|
+| Range-request reader | fetch header, parse IFD, fetch only needed tile offsets |
+| Multi-tile assembly | the reader currently rejects multi-tile as fatal, by design — needs to assemble instead |
+| UTM ↔ WGS84 | data is UTM, and the DEM gate correctly rejects non-4326 today |
+| Band selection | 3 bands; confirm which index is height |
+| Manifest fetch + tile match | JSON parse, affine containment test |
+
+**Caveats that must reach the user, not be buried:**
+
+- Height MAE is 1.5 m, but was **evaluated only in North America, Europe and Japan**. Accuracy
+  over Bangalore is unmeasured by the publisher.
+- Height is **relative to ground**, not absolute — which is exactly what extrusion wants, but it
+  is not a DEM and must not be treated as one.
+- ~4 m effective resolution. Our median footprint is 156 m² (~12 m across) so it is fine, but the
+  smallest are 19.5 m² (~4.4 m) — about one pixel, and unreliable. **Below a footprint threshold,
+  fall back to the tag chain** rather than trusting a single pixel.
+- Roof position may be shifted, being derived from Sentinel-2.
+
+**Recommendation:** implement as its own phase after 5.1–5.4, not before. The extruder needs *a*
+height, and the tag chain provides one today; height *quality* is a refinement, and it is better
+to have buildings standing at approximate heights than a perfect height source and nothing to
+apply it to. Sequenced this way it also arrives with the extruder already able to show the
+difference.
+
 ### 5.0 Decided: footprints are generated, not swapped for prefabs
 
 Measured on a real 1 km² Bangalore region, 1,314 buildings:
