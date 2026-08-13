@@ -20,6 +20,7 @@ public class OSMWorldGenCore : ModuleRules
             "Core",
             "CoreUObject",
             "Engine",
+            "GeometryCore",   // PolygonTriangulation, for building roofs from footprints
         });
 
         PrivateDependencyModuleNames.AddRange(new string[]

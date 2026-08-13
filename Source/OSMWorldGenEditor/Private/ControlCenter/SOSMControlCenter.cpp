@@ -6,6 +6,7 @@
 #include "Session/FOSMGraphSession.h"
 #include "Generation/FOSMDryRunReport.h"
 #include "Engine/StaticMesh.h"
+#include "Generation/UOSMBuildingArchetype.h"
 #include "PropertyCustomizationHelpers.h"
 #include "Settings/UOSMWorldGenSettings.h"
 #include "Elevation/FOSMGeoTIFFTile.h"
@@ -913,6 +914,28 @@ TSharedRef<SWidget> SOSMControlCenter::BuildAssetsPanel()
 }
 
 // ---------------------------------------------------------------------------
+namespace
+{
+    /**
+     * What an asset slot for this node type may point at.
+     *
+     * Buildings and roads take a STYLE — an archetype recipe applied to the feature's own
+     * footprint — because a mesh cannot fit footprints spanning 19.5 to 7,814 m2. Scatter and
+     * props take a real mesh, since they have no footprint to conform to.
+     */
+    UClass* GetAllowedAssetClass(EOSMNodeType Type)
+    {
+        return (Type == EOSMNodeType::Building)
+            ? UOSMBuildingArchetype::StaticClass()
+            : UStaticMesh::StaticClass();
+    }
+
+    const TCHAR* GetSlotNoun(EOSMNodeType Type)
+    {
+        return (Type == EOSMNodeType::Building) ? TEXT("+ Archetype") : TEXT("+ Asset Slot");
+    }
+}
+
 void SOSMControlCenter::RefreshAssetRules()
 {
     if (!AssetRulesBox.IsValid())
@@ -933,216 +956,256 @@ void SOSMControlCenter::RefreshAssetRules()
 
     for (const EOSMNodeType Type : GetPresentNodeTypes())
     {
-        // Junctions are topology, not something an asset is placed on.
-        if (Type == EOSMNodeType::Junction) continue;
+        // Junctions are topology and terrain comes from the DEM — neither is something an asset
+        // is placed on.
+        if (Type == EOSMNodeType::Junction || Type == EOSMNodeType::TerrainTile) continue;
 
         const int32 NodeCount = Graph->CountNodesOfType(Type);
 
-        AssetRulesBox->AddSlot().AutoHeight().Padding(0, 6, 0, 2)
+        // Subtypes present for this type, with counts. Rules are configured per subtype so
+        // "commercial" can carry a different archetype library from "apartments" — the whole
+        // point of archetypes is that variety is scoped to a kind of building.
+        TMap<FString, int32> SubTypeCounts;
+        for (const int32 NodeId : Graph->GetNodesOfType(Type))
+        {
+            ++SubTypeCounts.FindOrAdd(Graph->Nodes[NodeId].SubType);
+        }
+
+        TArray<FString> SubTypes;
+        SubTypeCounts.GetKeys(SubTypes);
+
+        // Most common first: with 75% of buildings untyped, the dominant bucket is the one worth
+        // configuring, and burying it under alphabetical order hides that.
+        SubTypes.Sort([&SubTypeCounts](const FString& A, const FString& B)
+        {
+            return SubTypeCounts[A] > SubTypeCounts[B];
+        });
+
+        // ---- Category header ----
+        AssetRulesBox->AddSlot().AutoHeight().Padding(0, 10, 0, 2)
         [
-            SNew(SHorizontalBox)
-
-            + SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-            [
-                SNew(STextBlock).Text(FText::FromString(FString::Printf(
-                    TEXT("%s  (%d nodes)"), *OSMNodeTypeToString(Type), NodeCount)))
-            ]
-
-            + SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
-            [
-                SNew(SButton)
-                .Text(LOCTEXT("AddChoice", "+ Asset Slot"))
-                .ToolTipText(LOCTEXT("AddChoiceTip",
-                    "Add an asset slot for this category. Weights are relative; the percentages "
-                    "shown are normalised from them."))
-                .OnClicked_Lambda([this, Type]()
-                {
-                    FOSMAssetRule& Rule = Graph->Config.FindOrAddRule(Type, FString());
-                    FOSMAssetChoice Choice;
-                    Choice.Label = FString::Printf(TEXT("Slot %d"), Rule.Choices.Num() + 1);
-                    Choice.Weight = 1.0f;
-                    Rule.Choices.Add(Choice);
-                    RefreshAssetRules();
-                    return FReply::Handled();
-                })
-            ]
+            SNew(STextBlock).Text(FText::FromString(FString::Printf(
+                TEXT("%s   —   %d node(s), %d subtype(s)"),
+                *OSMNodeTypeToString(Type), NodeCount, SubTypes.Num())))
         ];
 
-        const FOSMAssetRule* ExistingRule = Graph->Config.FindRule(Type, FString());
-        if (!ExistingRule || ExistingRule->Choices.Num() == 0)
+        for (const FString& SubType : SubTypes)
         {
-            AssetRulesBox->AddSlot().AutoHeight().Padding(16, 0, 0, 2)
-            [
-                SNew(STextBlock)
-                .Text(LOCTEXT("NoAssets", "no assets assigned — generation will fall back"))
-            ];
-            continue;
-        }
+            const int32 Count = SubTypeCounts[SubType];
+            const FString Label = SubType.IsEmpty() ? TEXT("<untyped>") : SubType;
 
-        // Per-corridor toggle, for roads only. This is the rule that stops one street
-        // alternating mud and tarmac every ten metres.
-        if (Type == EOSMNodeType::RoadSegment)
-        {
-            AssetRulesBox->AddSlot().AutoHeight().Padding(16, 0, 0, 2)
-            [
-                SNew(SCheckBox)
-                .IsChecked_Lambda([this, Type]()
-                {
-                    const FOSMAssetRule* Rule = Graph->Config.FindRule(Type, FString());
-                    return (Rule && Rule->bSelectPerCorridor) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-                })
-                .OnCheckStateChanged_Lambda([this, Type](ECheckBoxState NewState)
-                {
-                    Graph->Config.FindOrAddRule(Type, FString()).bSelectPerCorridor =
-                        (NewState == ECheckBoxState::Checked);
-                })
-                [
-                    SNew(STextBlock).Text(LOCTEXT("PerCorridor",
-                        "Choose per corridor, so a street keeps one surface along its length"))
-                ]
-            ];
-        }
-
-        for (int32 ChoiceIndex = 0; ChoiceIndex < ExistingRule->Choices.Num(); ++ChoiceIndex)
-        {
-            AssetRulesBox->AddSlot().AutoHeight().Padding(16, 0, 0, 2)
+            // ---- Subtype row ----
+            AssetRulesBox->AddSlot().AutoHeight().Padding(14, 4, 0, 2)
             [
                 SNew(SHorizontalBox)
 
-                + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
-                [
-                    SNew(SBox).WidthOverride(64.0f)
-                    [
-                        // Percentage is derived, never stored: showing it read-only keeps the
-                        // weights independent, so editing one slot cannot silently rewrite the
-                        // others to keep a total at 100.
-                        SNew(STextBlock)
-                        .Text_Lambda([this, Type, ChoiceIndex]()
-                        {
-                            const FOSMAssetRule* Rule = Graph->Config.FindRule(Type, FString());
-                            const float Ratio = Rule ? Rule->GetNormalisedRatio(ChoiceIndex) : 0.0f;
-                            return FText::FromString(FString::Printf(TEXT("%5.1f%%"), Ratio * 100.0f));
-                        })
-                    ]
-                ]
-
-                + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
-                [
-                    SNew(SBox).WidthOverride(90.0f)
-                    [
-                        SNew(SSpinBox<float>)
-                        .MinValue(0.0f)
-                        .MaxValue(100.0f)
-                        .Delta(0.1f)
-                        .ToolTipText(LOCTEXT("WeightTip", "Relative weight, not a percentage."))
-                        .Value_Lambda([this, Type, ChoiceIndex]()
-                        {
-                            const FOSMAssetRule* Rule = Graph->Config.FindRule(Type, FString());
-                            return (Rule && Rule->Choices.IsValidIndex(ChoiceIndex))
-                                ? Rule->Choices[ChoiceIndex].Weight : 0.0f;
-                        })
-                        .OnValueChanged_Lambda([this, Type, ChoiceIndex](float NewValue)
-                        {
-                            FOSMAssetRule& Rule = Graph->Config.FindOrAddRule(Type, FString());
-                            if (Rule.Choices.IsValidIndex(ChoiceIndex))
-                            {
-                                Rule.Choices[ChoiceIndex].Weight = NewValue;
-                            }
-                        })
-                    ]
-                ]
-
                 + SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
                 [
-                    // The engine's own asset picker, so it behaves the way every other asset
-                    // field in the editor does: a dropdown, drag-and-drop from the Content
-                    // Browser, "use selected", and a browse-to button. A hand-rolled text field
-                    // would have been a worse version of something the user already knows.
-                    SNew(SObjectPropertyEntryBox)
-                    .AllowedClass(UStaticMesh::StaticClass())
-                    .AllowClear(true)
-                    .DisplayUseSelected(true)
-                    .DisplayBrowse(true)
-                    .ThumbnailPool(nullptr)
-                    .ObjectPath_Lambda([this, Type, ChoiceIndex]() -> FString
-                    {
-                        const FOSMAssetRule* Rule = Graph.IsValid()
-                            ? Graph->Config.FindRule(Type, FString()) : nullptr;
-
-                        return (Rule && Rule->Choices.IsValidIndex(ChoiceIndex))
-                            ? Rule->Choices[ChoiceIndex].Asset.ToString()
-                            : FString();
-                    })
-                    .OnObjectChanged_Lambda([this, Type, ChoiceIndex](const FAssetData& AssetData)
-                    {
-                        if (!Graph.IsValid()) return;
-
-                        FOSMAssetRule& Rule = Graph->Config.FindOrAddRule(Type, FString());
-                        if (!Rule.Choices.IsValidIndex(ChoiceIndex)) return;
-
-                        Rule.Choices[ChoiceIndex].Asset = AssetData.ToSoftObjectPath();
-
-                        // The label follows the asset unless the slot has been renamed, so the
-                        // dry run reads "Warehouse_01" rather than "Slot 1" without the user
-                        // having to type the name twice.
-                        const FString AssetName = AssetData.AssetName.ToString();
-                        if (Rule.Choices[ChoiceIndex].Label.StartsWith(TEXT("Slot "))
-                            || Rule.Choices[ChoiceIndex].Label.IsEmpty())
-                        {
-                            Rule.Choices[ChoiceIndex].Label = AssetName.IsEmpty()
-                                ? FString::Printf(TEXT("Slot %d"), ChoiceIndex + 1)
-                                : AssetName;
-                        }
-
-                        RefreshAssetRules();
-                    })
+                    SNew(STextBlock).Text(FText::FromString(FString::Printf(
+                        TEXT("%s  (%d)"), *Label, Count)))
                 ]
 
-                + SHorizontalBox::Slot().AutoWidth()
+                + SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
                 [
                     SNew(SButton)
-                    .Text(LOCTEXT("RemoveChoice", "x"))
-                    .OnClicked_Lambda([this, Type, ChoiceIndex]()
+                    .Text(FText::FromString(GetSlotNoun(Type)))
+                    .ToolTipText(LOCTEXT("AddSlotTip",
+                        "Add a slot for this subtype. Weights are relative; the percentages shown "
+                        "are normalised from them."))
+                    .OnClicked_Lambda([this, Type, SubType]()
                     {
-                        FOSMAssetRule& Rule = Graph->Config.FindOrAddRule(Type, FString());
-                        if (Rule.Choices.IsValidIndex(ChoiceIndex))
-                        {
-                            Rule.Choices.RemoveAt(ChoiceIndex);
-                        }
+                        FOSMAssetRule& Rule = Graph->Config.FindOrAddRule(Type, SubType);
+                        FOSMAssetChoice Choice;
+                        Choice.Label = FString::Printf(TEXT("Slot %d"), Rule.Choices.Num() + 1);
+                        Choice.Weight = 1.0f;
+                        Rule.Choices.Add(Choice);
                         RefreshAssetRules();
                         return FReply::Handled();
                     })
                 ]
             ];
-        }
 
-        AssetRulesBox->AddSlot().AutoHeight().Padding(16, 2, 0, 4)
-        [
-            SNew(SHorizontalBox)
-            + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
-            [
-                SNew(STextBlock).Text(LOCTEXT("SeedLabel", "seed"))
-            ]
-            + SHorizontalBox::Slot().AutoWidth()
-            [
-                SNew(SBox).WidthOverride(110.0f)
+            // FindRule falls back to the type-wide rule, which would make an unconfigured subtype
+            // look configured. The exact-match check keeps each row honest about its own state.
+            const FOSMAssetRule* ExactRule = nullptr;
+            for (const FOSMAssetRule& Candidate : Graph->Config.Rules)
+            {
+                if (Candidate.NodeType == Type && Candidate.SubType == SubType)
+                {
+                    ExactRule = &Candidate;
+                    break;
+                }
+            }
+
+            if (!ExactRule || ExactRule->Choices.Num() == 0)
+            {
+                AssetRulesBox->AddSlot().AutoHeight().Padding(30, 0, 0, 2)
                 [
-                    // Per rule, not global: changing the buildings seed must not reshuffle the
-                    // roads. An edit should only affect what it names.
-                    SNew(SSpinBox<int32>)
-                    .MinValue(0)
-                    .Value_Lambda([this, Type]()
+                    SNew(STextBlock).Text(LOCTEXT("NoAssets",
+                        "nothing assigned — these will fall back"))
+                ];
+                continue;
+            }
+
+            // Per-corridor toggle, roads only: the rule that stops one street alternating
+            // surfaces every ten metres.
+            if (Type == EOSMNodeType::RoadSegment)
+            {
+                AssetRulesBox->AddSlot().AutoHeight().Padding(30, 0, 0, 2)
+                [
+                    SNew(SCheckBox)
+                    .IsChecked_Lambda([this, Type, SubType]()
                     {
-                        const FOSMAssetRule* Rule = Graph->Config.FindRule(Type, FString());
-                        return Rule ? Rule->Seed : 0;
+                        const FOSMAssetRule* Rule = Graph->Config.FindRule(Type, SubType);
+                        return (Rule && Rule->bSelectPerCorridor)
+                            ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
                     })
-                    .OnValueChanged_Lambda([this, Type](int32 NewValue)
+                    .OnCheckStateChanged_Lambda([this, Type, SubType](ECheckBoxState NewState)
                     {
-                        Graph->Config.FindOrAddRule(Type, FString()).Seed = NewValue;
+                        Graph->Config.FindOrAddRule(Type, SubType).bSelectPerCorridor =
+                            (NewState == ECheckBoxState::Checked);
                     })
+                    [
+                        SNew(STextBlock).Text(LOCTEXT("PerCorridor",
+                            "one surface per street"))
+                    ]
+                ];
+            }
+
+            for (int32 ChoiceIndex = 0; ChoiceIndex < ExactRule->Choices.Num(); ++ChoiceIndex)
+            {
+                AssetRulesBox->AddSlot().AutoHeight().Padding(30, 0, 0, 2)
+                [
+                    SNew(SHorizontalBox)
+
+                    + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+                    [
+                        SNew(SBox).WidthOverride(58.0f)
+                        [
+                            // Percentage is derived, never stored: showing it read-only keeps the
+                            // weights independent, so editing one slot cannot silently rewrite
+                            // the others to hold a total at 100.
+                            SNew(STextBlock)
+                            .Text_Lambda([this, Type, SubType, ChoiceIndex]()
+                            {
+                                const FOSMAssetRule* Rule = Graph->Config.FindRule(Type, SubType);
+                                const float Ratio = Rule ? Rule->GetNormalisedRatio(ChoiceIndex) : 0.0f;
+                                return FText::FromString(FString::Printf(TEXT("%5.1f%%"), Ratio * 100.0f));
+                            })
+                        ]
+                    ]
+
+                    + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+                    [
+                        SNew(SBox).WidthOverride(76.0f)
+                        [
+                            SNew(SSpinBox<float>)
+                            .MinValue(0.0f).MaxValue(100.0f).Delta(0.1f)
+                            .ToolTipText(LOCTEXT("WeightTip", "Relative weight, not a percentage."))
+                            .Value_Lambda([this, Type, SubType, ChoiceIndex]()
+                            {
+                                const FOSMAssetRule* Rule = Graph->Config.FindRule(Type, SubType);
+                                return (Rule && Rule->Choices.IsValidIndex(ChoiceIndex))
+                                    ? Rule->Choices[ChoiceIndex].Weight : 0.0f;
+                            })
+                            .OnValueChanged_Lambda([this, Type, SubType, ChoiceIndex](float NewValue)
+                            {
+                                FOSMAssetRule& Rule = Graph->Config.FindOrAddRule(Type, SubType);
+                                if (Rule.Choices.IsValidIndex(ChoiceIndex))
+                                {
+                                    Rule.Choices[ChoiceIndex].Weight = NewValue;
+                                }
+                            })
+                        ]
+                    ]
+
+                    + SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+                    [
+                        // The engine's own asset field, so it behaves the way every other asset
+                        // picker does. Buildings accept an archetype; everything else a mesh.
+                        SNew(SObjectPropertyEntryBox)
+                        .AllowedClass(GetAllowedAssetClass(Type))
+                        .AllowClear(true)
+                        .DisplayUseSelected(true)
+                        .DisplayBrowse(true)
+                        .ThumbnailPool(nullptr)
+                        .ObjectPath_Lambda([this, Type, SubType, ChoiceIndex]() -> FString
+                        {
+                            const FOSMAssetRule* Rule = Graph.IsValid()
+                                ? Graph->Config.FindRule(Type, SubType) : nullptr;
+                            return (Rule && Rule->Choices.IsValidIndex(ChoiceIndex))
+                                ? Rule->Choices[ChoiceIndex].Asset.ToString() : FString();
+                        })
+                        .OnObjectChanged_Lambda([this, Type, SubType, ChoiceIndex](const FAssetData& AssetData)
+                        {
+                            if (!Graph.IsValid()) return;
+
+                            FOSMAssetRule& Rule = Graph->Config.FindOrAddRule(Type, SubType);
+                            if (!Rule.Choices.IsValidIndex(ChoiceIndex)) return;
+
+                            Rule.Choices[ChoiceIndex].Asset = AssetData.ToSoftObjectPath();
+
+                            // The label follows the asset unless renamed, so the dry run reads
+                            // "Commercial_Glass_02" rather than "Slot 1".
+                            const FString AssetName = AssetData.AssetName.ToString();
+                            if (Rule.Choices[ChoiceIndex].Label.StartsWith(TEXT("Slot "))
+                                || Rule.Choices[ChoiceIndex].Label.IsEmpty())
+                            {
+                                Rule.Choices[ChoiceIndex].Label = AssetName.IsEmpty()
+                                    ? FString::Printf(TEXT("Slot %d"), ChoiceIndex + 1)
+                                    : AssetName;
+                            }
+
+                            RefreshAssetRules();
+                        })
+                    ]
+
+                    + SHorizontalBox::Slot().AutoWidth()
+                    [
+                        SNew(SButton)
+                        .Text(LOCTEXT("RemoveChoice", "x"))
+                        .OnClicked_Lambda([this, Type, SubType, ChoiceIndex]()
+                        {
+                            FOSMAssetRule& Rule = Graph->Config.FindOrAddRule(Type, SubType);
+                            if (Rule.Choices.IsValidIndex(ChoiceIndex))
+                            {
+                                Rule.Choices.RemoveAt(ChoiceIndex);
+                            }
+                            RefreshAssetRules();
+                            return FReply::Handled();
+                        })
+                    ]
+                ];
+            }
+
+            AssetRulesBox->AddSlot().AutoHeight().Padding(30, 2, 0, 4)
+            [
+                SNew(SHorizontalBox)
+                + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+                [
+                    SNew(STextBlock).Text(LOCTEXT("SeedLabel", "seed"))
                 ]
-            ]
-        ];
+                + SHorizontalBox::Slot().AutoWidth()
+                [
+                    SNew(SBox).WidthOverride(96.0f)
+                    [
+                        // Per rule, not global: changing the seed for commercial buildings must
+                        // not reshuffle the houses. An edit should only affect what it names.
+                        SNew(SSpinBox<int32>)
+                        .MinValue(0)
+                        .Value_Lambda([this, Type, SubType]()
+                        {
+                            const FOSMAssetRule* Rule = Graph->Config.FindRule(Type, SubType);
+                            return Rule ? Rule->Seed : 0;
+                        })
+                        .OnValueChanged_Lambda([this, Type, SubType](int32 NewValue)
+                        {
+                            Graph->Config.FindOrAddRule(Type, SubType).Seed = NewValue;
+                        })
+                    ]
+                ]
+            ];
+        }
     }
 }
 
