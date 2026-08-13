@@ -2,6 +2,7 @@
 
 #include "ControlCenter/SOSMControlCenter.h"
 #include "Graph/FOSMGraphAssetIO.h"
+#include "Scene/FOSMSceneSetup.h"
 #include "Graph/UOSMCityGraph.h"
 #include "DrawDebugHelpers.h"
 #include "Editor.h"
@@ -169,6 +170,27 @@ TSharedRef<SWidget> SOSMControlCenter::BuildHeader()
             + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
             [
                 SNew(SButton)
+                .Text(LOCTEXT("SetUpScene", "Set Up Scene"))
+                .ToolTipText(LOCTEXT("SetUpSceneTip",
+                    "Add a sun, sky light, atmosphere and fog to the level, then frame the region.\n"
+                    "Creates ENVIRONMENT actors only — never buildings, roads or terrain. Reuses "
+                    "anything the level already has instead of stacking duplicates."))
+                .OnClicked(this, &SOSMControlCenter::OnSetUpScene)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("FrameRegion", "Frame Region"))
+                .ToolTipText(LOCTEXT("FrameRegionTip",
+                    "Point the viewport camera at the region. Touches no actors — the overlay draws "
+                    "around the world origin, and this is usually why it looks like nothing rendered."))
+                .OnClicked(this, &SOSMControlCenter::OnFrameRegion)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
+            [
+                SNew(SButton)
                 .Text(LOCTEXT("RedrawOverlay", "Redraw Overlay"))
                 .ToolTipText(LOCTEXT("RedrawOverlayTip",
                     "Redraw the graph in the level viewport. Debug lines only — no actors are created."))
@@ -192,6 +214,32 @@ TSharedRef<SWidget> SOSMControlCenter::BuildHeader()
                 .OnClicked(this, &SOSMControlCenter::OnSaveGraph)
             ]
         ];
+}
+
+// ---------------------------------------------------------------------------
+FReply SOSMControlCenter::OnSetUpScene()
+{
+    const FOSMSceneSetup::FResult SetupResult = FOSMSceneSetup::SetUpScene(Region);
+    SceneSetupStatus = SetupResult.ToString();
+
+    UE_LOG(LogTemp, Log, TEXT("%s"), *SceneSetupStatus);
+
+    // The overlay is cleared by level changes, so redraw once the environment exists.
+    RefreshOverlay();
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnFrameRegion()
+{
+    if (!FOSMSceneSetup::FrameRegion(Region))
+    {
+        SceneSetupStatus = TEXT("Could not move the camera — no perspective viewport is open.");
+    }
+    else
+    {
+        SceneSetupStatus = TEXT("Camera framed on the region.");
+    }
+    return FReply::Handled();
 }
 
 // ---------------------------------------------------------------------------

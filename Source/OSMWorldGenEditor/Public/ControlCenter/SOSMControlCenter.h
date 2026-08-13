@@ -139,6 +139,11 @@ private:
     // ---- Actions ----
     FReply OnSaveGraph();
     FReply OnRefreshOverlayClicked();
+    FReply OnSetUpScene();
+    FReply OnFrameRegion();
+
+    /** Last scene-setup result, shown in the header so the action is not silent. */
+    FString SceneSetupStatus;
 
     /** Node types present in the graph, in declaration order, for stable panel ordering. */
     TArray<EOSMNodeType> GetPresentNodeTypes() const;
