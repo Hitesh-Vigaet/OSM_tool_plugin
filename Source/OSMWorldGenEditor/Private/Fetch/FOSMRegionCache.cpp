@@ -92,7 +92,7 @@ bool FOSMCacheManifest::LoadFromFile(const FString& FilePath, FOSMCacheManifest&
 // ---------------------------------------------------------------------------
 bool FOSMCacheManifest::MatchesFetchTerms(const FString& InDEMType, double InDEMPaddingDegrees) const
 {
-    if (Version != 1) return false;
+    if (Version != CurrentVersion) return false;
     if (!DEMType.Equals(InDEMType, ESearchCase::IgnoreCase)) return false;
 
     // Padding is compared with a tolerance far below one DEM cell, so a trivial float

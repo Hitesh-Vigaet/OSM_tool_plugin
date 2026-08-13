@@ -43,8 +43,15 @@ struct OSMWORLDGENEDITOR_API FOSMCacheManifest
     /** Verdict recorded by the import gates the last time these files were validated. */
     FString LastValidationVerdict;
 
-    /** Plugin schema version, so a future format change can invalidate old manifests. */
-    int32 Version = 1;
+    /**
+     * Manifest schema + fetch-semantics version.
+     *
+     * Bumped whenever something changes that alters what a fetch RETURNS, not just how the
+     * manifest is written — version 2 is the node-bounded Overpass query. Old cache entries
+     * then stop matching and are re-fetched, which is the whole reason this field exists.
+     */
+    static constexpr int32 CurrentVersion = 2;
+    int32 Version = CurrentVersion;
 
     bool SaveToFile(const FString& FilePath) const;
     static bool LoadFromFile(const FString& FilePath, FOSMCacheManifest& OutManifest);
