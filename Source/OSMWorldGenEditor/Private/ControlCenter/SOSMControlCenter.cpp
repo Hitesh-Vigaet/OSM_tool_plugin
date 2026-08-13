@@ -433,6 +433,84 @@ TSharedRef<SWidget> SOSMControlCenter::BuildExplorerPanel()
                 })
             ]
 
+            // Terrain sits above the OSM categories rather than inside the tree: it comes from
+            // the DEM, not from any classified feature, and listing it as a peer of "Buildings"
+            // would imply it is one. It is the ground everything else is snapped to, so it reads
+            // first and it reads separately.
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
+            [
+                SNew(SBorder)
+                .Padding(4.0f)
+                [
+                    SNew(SVerticalBox)
+
+                    + SVerticalBox::Slot().AutoHeight()
+                    [
+                        SNew(SHorizontalBox)
+
+                        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 4, 0)
+                        [
+                            SNew(SCheckBox)
+                            .IsEnabled_Lambda([this]() { return bHasDEM; })
+                            .IsChecked_Lambda([this]()
+                            {
+                                return bShowTerrain ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+                            })
+                            .OnCheckStateChanged_Lambda([this](ECheckBoxState)
+                            {
+                                OnToggleTerrain();
+                            })
+                        ]
+
+                        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 4, 0)
+                        [
+                            SNew(STextBlock)
+                            .Text(FText::FromString(TEXT("■")))
+                            .ColorAndOpacity(FSlateColor(FLinearColor(FColor(96, 104, 84))))
+                        ]
+
+                        + SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+                        [
+                            SNew(STextBlock)
+                            .Text_Lambda([this]()
+                            {
+                                if (!bHasDEM)
+                                {
+                                    return LOCTEXT("TerrainNone", "Terrain  —  no DEM in this import");
+                                }
+
+                                const FOSMGeoTIFFTile& Tile = DEMSampler.GetTileMetadata();
+                                return FText::FromString(FString::Printf(
+                                    TEXT("Terrain (DEM)   %d x %d px"), Tile.Width, Tile.Height));
+                            })
+                        ]
+                    ]
+
+                    + SVerticalBox::Slot().AutoHeight().Padding(20, 2, 0, 0)
+                    [
+                        SNew(STextBlock)
+                        .AutoWrapText(true)
+                        .Text_Lambda([this]()
+                        {
+                            if (!bHasDEM)
+                            {
+                                return LOCTEXT("TerrainNoneHint",
+                                    "Features will be drawn flat. Re-import with elevation to snap them to the ground.");
+                            }
+
+                            const FOSMGeoTIFFTile& Tile = DEMSampler.GetTileMetadata();
+                            return FText::FromString(FString::Printf(
+                                TEXT("elevation %.0f–%.0f m   ·   %.0f m relief   ·   ~%.0f m/px   ·   features %s"),
+                                Tile.MinElevation, Tile.MaxElevation,
+                                Tile.MaxElevation - Tile.MinElevation,
+                                Tile.GetResolutionArcSeconds() / 3600.0 * 111320.0
+                                    * FMath::Cos(FMath::DegreesToRadians(Region.IsValid() ? Region.GetCenterLat() : 0.0)),
+                                bDrapeOnTerrain ? TEXT("snapped to it") : TEXT("drawn flat")));
+                        })
+                    ]
+                ]
+            ]
+
             + SVerticalBox::Slot().FillHeight(1.0f)
             [
                 SAssignNew(ExplorerTree, STreeView<TSharedPtr<FOSMExplorerItem>>)
