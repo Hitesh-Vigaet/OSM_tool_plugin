@@ -115,8 +115,11 @@ namespace
         Mesh.UVs.Emplace(UEndMeters,   VStartMeters);
         Mesh.UVs.Emplace(UStartMeters, VStartMeters);
 
-        Mesh.Triangles.Append({ Base + 0, Base + 1, Base + 2 });
-        Mesh.Triangles.Append({ Base + 0, Base + 2, Base + 3 });
+        // Wound for an INWARD geometric normal, which is what makes the wall visible from outside.
+        // See the winding convention on FOSMBuildingMesher.h. The vertex normals above stay
+        // outward, because they light the surface rather than face it.
+        Mesh.Triangles.Append({ Base + 0, Base + 2, Base + 1 });
+        Mesh.Triangles.Append({ Base + 0, Base + 3, Base + 2 });
 
         Mesh.TriangleSections.Add(static_cast<uint8>(Section));
         Mesh.TriangleSections.Add(static_cast<uint8>(Section));
@@ -175,6 +178,16 @@ bool FOSMBuildingMesher::Build(const FOSMBuildingMeshParams& Params, FOSMMeshDat
     // commercial street reads wrongly when every storey is identical.
     const double GroundFloorTopCm = FMath::Min(PlinthCm + FloorCm, HeightCm);
 
+    // The footprint with every bay division inserted as a real vertex.
+    //
+    // The roof and floor caps are built from this rather than from the raw footprint, so their
+    // boundary vertices coincide exactly with the wall corners. Capping the raw ring instead
+    // leaves a T-junction at every bay division — the cap edge spans a wall the walls themselves
+    // split into a dozen pieces — which is a hairline crack along the roofline under any renderer
+    // that interpolates depth even slightly differently on the two sides.
+    TArray<FVector2D> DividedRing;
+    DividedRing.Reserve(Outer.Num() * 4);
+
     // ---- Walls ----
     for (int32 EdgeIndex = 0; EdgeIndex < Outer.Num(); ++EdgeIndex)
     {
@@ -200,6 +213,10 @@ bool FOSMBuildingMesher::Build(const FOSMBuildingMeshParams& Params, FOSMMeshDat
 
             const FVector2D A = FMath::Lerp(Start, End, T0);
             const FVector2D B = FMath::Lerp(Start, End, T1);
+
+            // Only the bay's start point: its end is the next bay's start, and the last bay's end
+            // is the next edge's start. Adding both would duplicate every vertex.
+            DividedRing.Add(A);
 
             const double UStart = WallLengthMeters * T0;
             const double UEnd = WallLengthMeters * T1;
@@ -240,10 +257,20 @@ bool FOSMBuildingMesher::Build(const FOSMBuildingMeshParams& Params, FOSMMeshDat
     // of real footprints are near-rectangular and the worst observed is 34 vertices, so a general
     // triangulator is comfortably fast enough here.
     {
-        TArray<FVector2D> RoofRing = Outer;
+        // The bay-divided ring where one was produced, so the cap welds to the wall tops. Ear
+        // clipping copes with the collinear vertices bay division introduces, but if it does not
+        // for some footprint, the raw outline is retried — a roof with a T-junction is a far
+        // better outcome than no roof.
+        TArray<FVector2D> RoofRing = DividedRing.Num() >= 3 ? DividedRing : Outer;
         TArray<UE::Geometry::FIndex3i> RoofTriangles;
 
         PolygonTriangulation::TriangulateSimplePolygon<double>(RoofRing, RoofTriangles, /*bCalculateVertexNormals*/ false);
+
+        if (RoofTriangles.Num() == 0 && RoofRing.Num() != Outer.Num())
+        {
+            RoofRing = Outer;
+            PolygonTriangulation::TriangulateSimplePolygon<double>(RoofRing, RoofTriangles, false);
+        }
 
         if (RoofTriangles.Num() == 0)
         {
@@ -269,11 +296,35 @@ bool FOSMBuildingMesher::Build(const FOSMBuildingMeshParams& Params, FOSMMeshDat
 
             for (const UE::Geometry::FIndex3i& Triangle : RoofTriangles)
             {
-                // Wound so the face points up. Unreal's front faces are clockwise viewed from the
-                // front, which for an up-facing triangle means reversing the CCW order the
-                // triangulator produces.
+                // Reversed from the triangulator's counter-clockwise output, giving a -Z geometric
+                // normal so the roof is visible from above.
                 OutMesh.Triangles.Append({ Base + Triangle.A, Base + Triangle.C, Base + Triangle.B });
                 OutMesh.TriangleSections.Add(static_cast<uint8>(EOSMMeshSection::Roof));
+            }
+
+            // ---- Floor ----
+            //
+            // A cap on the underside, wound the opposite way so it faces down. Buildings sit on
+            // sloped terrain, so without it the ground cuts into the interior on the uphill side
+            // and the building is visibly hollow. It also makes the mesh a closed solid, which is
+            // a property a test can check.
+            {
+                const int32 FloorBase = OutMesh.Vertices.Num();
+
+                for (const FVector2D& Point : RoofRing)
+                {
+                    OutMesh.Vertices.Emplace(Point.X * MetersToCm, Point.Y * MetersToCm, 0.0);
+                    OutMesh.Normals.Emplace(0.0, 0.0, -1.0);
+                    OutMesh.UVs.Emplace(Point.X, Point.Y);
+                }
+
+                for (const UE::Geometry::FIndex3i& Triangle : RoofTriangles)
+                {
+                    // The triangulator's own order, giving a +Z geometric normal — the opposite of
+                    // the roof, so the floor is the face visible from underneath.
+                    OutMesh.Triangles.Append({ FloorBase + Triangle.A, FloorBase + Triangle.B, FloorBase + Triangle.C });
+                    OutMesh.TriangleSections.Add(static_cast<uint8>(EOSMMeshSection::Roof));
+                }
             }
         }
     }

@@ -32,6 +32,7 @@ public class OSMWorldGenEditor : ModuleRules
             "Json",
             "DeveloperSettings",
             "ApplicationCore",
+            "AssetRegistry",            // finding saved city graphs for the plan-view dump
             "ProceduralMeshComponent",  // grey-box city geometry
             "GeometryCore",             // PolygonTriangulation for area surfaces
         });

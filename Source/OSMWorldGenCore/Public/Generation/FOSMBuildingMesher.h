@@ -6,6 +6,28 @@
 
 class UOSMBuildingArchetype;
 
+/**
+ * WINDING CONVENTION for every mesh this pipeline generates.
+ *
+ * Unreal renders a triangle as front-facing when its geometric normal — (v1-v0) x (v2-v0), by the
+ * right-hand rule — points AWAY from the camera. So a surface is visible from the side its
+ * geometric normal points away from:
+ *
+ *     ground seen from above   -> wind for a -Z geometric normal
+ *     a wall seen from outside -> wind for an INWARD geometric normal
+ *     a roof seen from above   -> wind for a -Z geometric normal
+ *     a floor seen from below  -> wind for a +Z geometric normal
+ *
+ * Vertex normals in FOSMMeshData are the opposite: they point outward, because those drive
+ * lighting and a wall should be lit as though it faces the sky, not the room.
+ *
+ * This is written down because getting it wrong is silent. A surface wound the wrong way does not
+ * warn, error or appear broken — it simply is not drawn, and the defect surfaces as "the terrain
+ * is missing" or "buildings have only two sides". It cost this pipeline both. Verified by
+ * rendering, not by reasoning: reversing the terrain winding turned a black frame into a visible
+ * surface.
+ */
+
 /** Which material a triangle belongs to. Kept small — one section per slot at build time. */
 enum class EOSMMeshSection : uint8
 {

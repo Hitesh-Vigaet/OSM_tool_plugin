@@ -22,12 +22,41 @@ class OSMWORLDGENEDITOR_API FOSMWorldBuilder
 public:
     struct FOptions
     {
+        /** The ground surface itself, sampled from the DEM. Everything else sits on it. */
+        bool bTerrain = true;
+
         bool bBuildings = true;
         bool bRoads = true;
         bool bAreas = true;      // vegetation, water, landuse, leisure
 
         /** Drape geometry onto the DEM surface rather than a flat plane. */
         bool bUseTerrain = true;
+
+        /**
+         * Target terrain quad size in metres.
+         *
+         * 8 m by default: fine enough that roads follow the ground without visibly stepping,
+         * coarse enough that a 1 km region stays one cheap mesh. The source is 30 m SRTM, so
+         * going much below this interpolates rather than reveals.
+         */
+        double TerrainQuadMeters = 8.0;
+
+        /**
+         * How far the ground extends beyond the outermost geometry.
+         *
+         * Not decoration: at the very edge the surface stops interpolating and starts clamping, so
+         * anything sitting exactly on the boundary is grounded against a flat approximation.
+         */
+        double TerrainMarginMeters = 20.0;
+
+        /**
+         * How far a building's base is sunk below the lowest ground beneath its footprint.
+         *
+         * Buildings are buried into their slope rather than balanced on it. Half a metre is enough
+         * to absorb the difference between the terrain grid and a footprint corner that falls
+         * between grid nodes, without a visible plinth on flat ground.
+         */
+        double FoundationSkirtMeters = 0.5;
 
         /**
          * Flat colours instead of assigned materials.
@@ -37,16 +66,28 @@ public:
          * all through a facade material.
          */
         bool bGreyBox = true;
+
+        /**
+         * When set, every emitted mesh is written here for offline inspection.
+         *
+         * Empty by default, so a normal build pays nothing. See FOSMGeometryDump for why looking
+         * at the output matters more than counting it.
+         */
+        FString DebugDumpPath;
     };
 
     struct FResult
     {
+        int32 Terrain = 0;
         int32 Buildings = 0;
         int32 Roads = 0;
         int32 Areas = 0;
         int32 Skipped = 0;
         TArray<FString> Problems;
         double DurationSeconds = 0.0;
+
+        /** Where the geometry dump was written, when one was requested. */
+        FString DumpPath;
 
         FString ToString() const;
     };
