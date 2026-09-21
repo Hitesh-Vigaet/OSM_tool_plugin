@@ -14,6 +14,14 @@
 #include "Graph/UOSMCityGraph.h"
 #include "DrawDebugHelpers.h"
 #include "Editor.h"
+#include "EngineUtils.h"
+#include "LevelEditorViewport.h"
+#include "ProceduralMeshComponent.h"
+#include "Materials/FOSMThermalMaterialBuilderV2.h"
+#include "Sensors/AOSMInfraredCamera.h"
+#include "Sensors/UOSMThermalMPC.h"
+#include "Engine/DirectionalLight.h"
+#include "Components/DirectionalLightComponent.h"
 #include "Framework/Docking/TabManager.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Input/SButton.h"
@@ -22,6 +30,10 @@
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
+#include "Widgets/Input/SSlider.h"
+#include "Sensors/FOSMThermalSimulation.h"
+#include "Sensors/FOSMThermalPresets.h"
 #include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/STreeView.h"
@@ -89,40 +101,50 @@ void SOSMControlCenter::Construct(const FArguments& InArgs)
     [
         SNew(SVerticalBox)
 
-        + SVerticalBox::Slot().AutoHeight().Padding(8.0f)
+        + SVerticalBox::Slot().AutoHeight()
         [
-            BuildHeader()
+            SNew(SScrollBox)
+            .Orientation(Orient_Horizontal)
+            + SScrollBox::Slot()
+            [
+                BuildHeader()
+            ]
         ]
 
-        // Explorer | Inspector, with the lower panels stacked under the inspector. A splitter
-        // rather than fixed widths because node names and tag values vary wildly in length.
-        + SVerticalBox::Slot().FillHeight(1.0f).Padding(8.0f, 0.0f, 8.0f, 8.0f)
+        + SVerticalBox::Slot().AutoHeight().Padding(8.0f, 8.0f, 8.0f, 0.0f)
         [
-            SNew(SSplitter)
-
-            + SSplitter::Slot().Value(0.36f)
+            SNew(SHorizontalBox)
+            + SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
             [
-                BuildExplorerPanel()
+                SNew(SButton)
+                .Text(LOCTEXT("TabCityExplorer", "City Explorer"))
+                .OnClicked_Lambda([this]() { ActiveTabIndex = 0; return FReply::Handled(); })
+                .IsEnabled_Lambda([this]() { return ActiveTabIndex != 0; })
+            ]
+            + SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("TabEnvironment", "Environment & Thermal"))
+                .OnClicked_Lambda([this]() { ActiveTabIndex = 1; return FReply::Handled(); })
+                .IsEnabled_Lambda([this]() { return ActiveTabIndex != 1; })
+            ]
+        ]
+
+        + SVerticalBox::Slot().FillHeight(1.0f).Padding(8.0f, 8.0f, 8.0f, 8.0f)
+        [
+            SNew(SWidgetSwitcher)
+            .WidgetIndex_Lambda([this]() { return ActiveTabIndex; })
+            
+            // Tab 0: City Explorer
+            + SWidgetSwitcher::Slot()
+            [
+                BuildCityExplorerTab()
             ]
 
-            + SSplitter::Slot().Value(0.64f)
+            // Tab 1: Environment
+            + SWidgetSwitcher::Slot()
             [
-                SNew(SSplitter).Orientation(Orient_Vertical)
-
-                + SSplitter::Slot().Value(0.55f)
-                [
-                    BuildInspectorPanel()
-                ]
-
-                + SSplitter::Slot().Value(0.25f)
-                [
-                    BuildAssetsPanel()
-                ]
-
-                + SSplitter::Slot().Value(0.20f)
-                [
-                    BuildIssuesPanel()
-                ]
+                BuildEnvironmentTab()
             ]
         ]
     ];
@@ -190,7 +212,11 @@ TSharedRef<SWidget> SOSMControlCenter::BuildHeader()
     return SNew(SBorder)
         .Padding(8.0f)
         [
-            SNew(SHorizontalBox)
+            SNew(SScrollBox)
+            .Orientation(Orient_Horizontal)
+            + SScrollBox::Slot()
+            [
+                SNew(SHorizontalBox)
 
             + SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
             [
@@ -324,6 +350,48 @@ TSharedRef<SWidget> SOSMControlCenter::BuildHeader()
             + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
             [
                 SNew(SButton)
+                .Text(LOCTEXT("SpawnIRCam", "Spawn IR Camera"))
+                .ToolTipText(LOCTEXT("SpawnIRCamTip",
+                    "Spawn the OSM Infrared Thermal Camera and pilot it in full-screen dynamic view."))
+                .OnClicked(this, &SOSMControlCenter::OnSpawnIRCamera)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("EjectIRCam", "Return to Perspective"))
+                .ToolTipText(LOCTEXT("EjectIRCamTip",
+                    "Exit IR Camera piloting and return to the normal editor perspective camera."))
+                .OnClicked(this, &SOSMControlCenter::OnEjectIRCamera)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(2.0f, 0.0f)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("PalIronbow", "Ironbow"))
+                .ToolTipText(LOCTEXT("PalIronbowTip", "Switch thermal camera to Ironbow false-colour palette (Purple -> Magenta -> Orange -> Yellow -> White)."))
+                .OnClicked(this, &SOSMControlCenter::OnSetPaletteIronbow)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(2.0f, 0.0f)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("PalWhiteHot", "White-Hot"))
+                .ToolTipText(LOCTEXT("PalWhiteHotTip", "Switch thermal camera to White-Hot FLIR palette (Cold = Black, Hot = Glowing White)."))
+                .OnClicked(this, &SOSMControlCenter::OnSetPaletteWhiteHot)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(2.0f, 0.0f)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("PalBlackHot", "Black-Hot"))
+                .ToolTipText(LOCTEXT("PalBlackHotTip", "Switch thermal camera to Black-Hot FLIR palette (Cold = White, Hot = Black)."))
+                .OnClicked(this, &SOSMControlCenter::OnSetPaletteBlackHot)
+            ]
+
+            + SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
+            [
+                SNew(SButton)
                 .Text(LOCTEXT("DryRun", "Dry Run"))
                 .ToolTipText(LOCTEXT("DryRunTip",
                     "Report exactly what generation would produce — counts, assets, ratios, "
@@ -340,6 +408,7 @@ TSharedRef<SWidget> SOSMControlCenter::BuildHeader()
                     "Save this graph and its configuration as a .uasset so the region can be reopened "
                     "without re-fetching."))
                 .OnClicked(this, &SOSMControlCenter::OnSaveGraph)
+            ]
             ]
         ];
 }
@@ -367,6 +436,7 @@ FReply SOSMControlCenter::OnBuildCity()
 
     FOSMWorldBuilder::FOptions Options;
     Options.bUseTerrain = bHasDEM;
+    Options.bSpawnIRCamera = false;
 
     const FOSMWorldBuilder::FResult BuildResult = FOSMWorldBuilder::Build(*Graph, Region, Options);
     DryRunText = BuildResult.ToString();
@@ -384,6 +454,213 @@ FReply SOSMControlCenter::OnClearCity()
 {
     const int32 Removed = FOSMWorldBuilder::Clear();
     DryRunText = FString::Printf(TEXT("Removed %d generated actor(s)."), Removed);
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnSpawnIRCamera()
+{
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World)
+    {
+        DryRunText = TEXT("Cannot spawn IR Camera: No editor world active.");
+        return FReply::Handled();
+    }
+
+    // 1. Ensure thermal post process material asset is generated and loaded with latest shader (force rebuild so updates apply)
+    UMaterialInterface* ThermalMat = FOSMThermalMaterialBuilderV2::GetOrCreateThermalPostProcessMaterial(/*bForceRebuild=*/ true);
+
+    // 2. Determine viewpoint from the user's active editor camera perspective
+    FVector CameraLocation(0.0, -10000.0, 15000.0);
+    FRotator CameraRotation(-35.0f, 90.0f, 0.0f);
+
+    FLevelEditorViewportClient* ActiveViewportClient = nullptr;
+    if (GEditor && GEditor->GetActiveViewport())
+    {
+        ActiveViewportClient = static_cast<FLevelEditorViewportClient*>(GEditor->GetActiveViewport()->GetClient());
+        if (ActiveViewportClient)
+        {
+            CameraLocation = ActiveViewportClient->GetViewTransform().GetLocation();
+            CameraRotation = ActiveViewportClient->GetViewTransform().GetRotation();
+        }
+    }
+
+    // 3. Clean up any stale IR camera so components are freshly initialized
+    for (TActorIterator<AOSMInfraredCamera> It(World); It; ++It)
+    {
+        World->DestroyActor(*It);
+    }
+
+    FActorSpawnParameters SpawnParams;
+    SpawnParams.ObjectFlags = RF_Transactional;
+
+    AOSMInfraredCamera* TargetCam = World->SpawnActor<AOSMInfraredCamera>(
+        AOSMInfraredCamera::StaticClass(), CameraLocation, CameraRotation, SpawnParams);
+
+    if (TargetCam)
+    {
+        TargetCam->SetActorLabel(TEXT("OSM_InfraredCamera"));
+        TargetCam->Tags.AddUnique(FOSMWorldBuilder::GetGeneratedActorTag());
+
+        if (ThermalMat)
+        {
+            TargetCam->ThermalPostProcessMaterial = ThermalMat;
+            TargetCam->SetupPostProcess();
+        }
+
+        // Apply UB City static baked thermal preset for photorealistic IR demo
+        const FOSMThermalPreset& Preset = FOSMThermalPreset::UBCity_Afternoon();
+        TargetCam->bUseStaticBakedThermal = true;
+        TargetCam->AmbientTemperatureK = Preset.AmbientTempK;
+        TargetCam->GroundLevelZ = Preset.GroundLevelZ;
+        TargetCam->BuildingMaxHeightCm = Preset.BuildingMaxHeightCm;
+        TargetCam->bEnableFLIRGhosting = true;
+        TargetCam->SetHeatSensitivity(CurrentHeatSensitivity);
+        TargetCam->UpdateCategoryTemperaturesOnMID(World);
+        TargetCam->UpdateMaterialParameters();
+
+        // Pilot the camera in the active editor viewport (full-screen, dynamic 60 FPS flight)
+        if (ActiveViewportClient)
+        {
+            ActiveViewportClient->SetActorLock(TargetCam);
+            ActiveViewportClient->bLockedCameraView = true;
+            ActiveViewportClient->UpdateViewForLockedActor();
+            ActiveViewportClient->Invalidate();
+        }
+
+        if (GEditor)
+        {
+            GEditor->SelectNone(true, true);
+            GEditor->NoteSelectionChange();
+            GEditor->RedrawAllViewports();
+        }
+
+        DryRunText = TEXT("Piloting OSM Infrared Camera! Use WASD + Right Mouse Button to fly around in full-screen dynamic thermal vision.\nClick 'Return to Perspective' or click the top-left viewport Eject icon to exit.");
+    }
+
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnEjectIRCamera()
+{
+    if (GEditor && GEditor->GetActiveViewport())
+    {
+        if (FLevelEditorViewportClient* ActiveViewportClient = static_cast<FLevelEditorViewportClient*>(GEditor->GetActiveViewport()->GetClient()))
+        {
+            ActiveViewportClient->SetActorLock(nullptr);
+            ActiveViewportClient->bLockedCameraView = false;
+            ActiveViewportClient->Invalidate();
+        }
+    }
+
+    DryRunText = TEXT("Returned to Perspective camera. IR Camera remains in the world.");
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnSetPaletteIronbow()
+{
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (World)
+    {
+        UMaterialInterface* ThermalMat = FOSMThermalMaterialBuilderV2::GetOrCreateThermalPostProcessMaterial(/*bForceRebuild=*/ true);
+        int32 Count = 0;
+        for (TActorIterator<AOSMInfraredCamera> It(World); It; ++It)
+        {
+            if (ThermalMat)
+            {
+                (*It)->ThermalPostProcessMaterial = ThermalMat;
+                (*It)->SetupPostProcess();
+            }
+            (*It)->SetThermalPalette(EOSMThermalPalette::Ironbow);
+            ++Count;
+        }
+
+        if (Count == 0)
+        {
+            OnSpawnIRCamera();
+            for (TActorIterator<AOSMInfraredCamera> It(World); It; ++It)
+            {
+                (*It)->SetThermalPalette(EOSMThermalPalette::Ironbow);
+            }
+        }
+
+        if (GEditor)
+        {
+            GEditor->RedrawAllViewports();
+        }
+        DryRunText = TEXT("Thermal camera switched to Ironbow (Vibrant False-Color spectrum).");
+    }
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnSetPaletteWhiteHot()
+{
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (World)
+    {
+        UMaterialInterface* ThermalMat = FOSMThermalMaterialBuilderV2::GetOrCreateThermalPostProcessMaterial(/*bForceRebuild=*/ true);
+        int32 Count = 0;
+        for (TActorIterator<AOSMInfraredCamera> It(World); It; ++It)
+        {
+            if (ThermalMat)
+            {
+                (*It)->ThermalPostProcessMaterial = ThermalMat;
+                (*It)->SetupPostProcess();
+            }
+            (*It)->SetThermalPalette(EOSMThermalPalette::WhiteHot);
+            ++Count;
+        }
+
+        if (Count == 0)
+        {
+            OnSpawnIRCamera();
+            for (TActorIterator<AOSMInfraredCamera> It(World); It; ++It)
+            {
+                (*It)->SetThermalPalette(EOSMThermalPalette::WhiteHot);
+            }
+        }
+
+        if (GEditor)
+        {
+            GEditor->RedrawAllViewports();
+        }
+        DryRunText = TEXT("Thermal camera switched to White-Hot FLIR (Deep Black to Glowing White).");
+    }
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnSetPaletteBlackHot()
+{
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (World)
+    {
+        UMaterialInterface* ThermalMat = FOSMThermalMaterialBuilderV2::GetOrCreateThermalPostProcessMaterial(/*bForceRebuild=*/ true);
+        int32 Count = 0;
+        for (TActorIterator<AOSMInfraredCamera> It(World); It; ++It)
+        {
+            if (ThermalMat)
+            {
+                (*It)->ThermalPostProcessMaterial = ThermalMat;
+                (*It)->SetupPostProcess();
+            }
+            (*It)->SetThermalPalette(EOSMThermalPalette::BlackHot);
+            ++Count;
+        }
+
+        if (Count == 0)
+        {
+            OnSpawnIRCamera();
+            for (TActorIterator<AOSMInfraredCamera> It(World); It; ++It)
+            {
+                (*It)->SetThermalPalette(EOSMThermalPalette::BlackHot);
+            }
+        }
+
+        if (GEditor)
+        {
+            GEditor->RedrawAllViewports();
+        }
+        DryRunText = TEXT("Thermal camera switched to Black-Hot FLIR (Inverted).");
+    }
     return FReply::Handled();
 }
 
@@ -1574,6 +1851,331 @@ FReply SOSMControlCenter::OnSaveGraph()
     }
 
     return FReply::Handled();
+}
+
+// ---------------------------------------------------------------------------
+TSharedRef<SWidget> SOSMControlCenter::BuildCityExplorerTab()
+{
+    return SNew(SSplitter)
+        + SSplitter::Slot().Value(0.36f)
+        [
+            BuildExplorerPanel()
+        ]
+        + SSplitter::Slot().Value(0.64f)
+        [
+            SNew(SSplitter).Orientation(Orient_Vertical)
+            + SSplitter::Slot().Value(0.55f)
+            [
+                BuildInspectorPanel()
+            ]
+            + SSplitter::Slot().Value(0.25f)
+            [
+                BuildAssetsPanel()
+            ]
+            + SSplitter::Slot().Value(0.20f)
+            [
+                BuildIssuesPanel()
+            ]
+        ];
+}
+
+TSharedRef<SWidget> SOSMControlCenter::BuildEnvironmentTab()
+{
+    TimeMultiplierOptions.Empty();
+    TimeMultiplierOptions.Add(MakeShared<FString>(TEXT("1x (Realtime)")));
+    TimeMultiplierOptions.Add(MakeShared<FString>(TEXT("10x (Fast)")));
+    TimeMultiplierOptions.Add(MakeShared<FString>(TEXT("60x (1 min/sec)")));
+    TimeMultiplierOptions.Add(MakeShared<FString>(TEXT("3600x (1 hr/sec)")));
+
+    return SNew(SScrollBox)
+        + SScrollBox::Slot().Padding(16.0f)
+        [
+            SNew(SVerticalBox)
+
+            // Dynamic Thermal Simulation Header
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 16)
+            [
+                SNew(STextBlock)
+                .Text(LOCTEXT("EnvTabHeader", "Thermal & Night Simulation Controls"))
+                .Font(FCoreStyle::GetDefaultFontStyle("Regular", 16))
+            ]
+
+            // Start / Reset Simulation Buttons
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 16)
+            [
+                SNew(SHorizontalBox)
+                + SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+                [
+                    SNew(SButton)
+                    .Text_Lambda([]() { return FOSMThermalSimulation::GlobalParams.bIsSimulationRunning ? LOCTEXT("PauseSim", "Pause Simulation") : LOCTEXT("PlaySim", "Play Simulation"); })
+                    .OnClicked(this, &SOSMControlCenter::OnToggleSimulationPlay)
+                ]
+                + SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+                [
+                    SNew(SButton)
+                    .Text(LOCTEXT("ResetSim", "Reset (Cold Start)"))
+                    .OnClicked(this, &SOSMControlCenter::OnResetSimulation)
+                ]
+            ]
+
+            // Day / Night Quick Presets
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+            [
+                SNew(STextBlock).Text(LOCTEXT("PresetsLabel", "Environment Presets (Day / Night Cycle)"))
+            ]
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 16)
+            [
+                SNew(SHorizontalBox)
+                + SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+                [
+                    SNew(SButton)
+                    .Text(LOCTEXT("PresetNoon", "Noon (12:00)"))
+                    .ToolTipText(LOCTEXT("PresetNoonTip", "Peak solar irradiance (1000 W/m²). High thermal contrast."))
+                    .OnClicked(this, &SOSMControlCenter::OnSetPresetNoon)
+                ]
+                + SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+                [
+                    SNew(SButton)
+                    .Text(LOCTEXT("PresetSunset", "Sunset (18:00)"))
+                    .ToolTipText(LOCTEXT("PresetSunsetTip", "Low sun angle, strong lateral shadows and lingering wall heat."))
+                    .OnClicked(this, &SOSMControlCenter::OnSetPresetSunset)
+                ]
+                + SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+                [
+                    SNew(SButton)
+                    .Text(LOCTEXT("PresetNight", "Midnight IR (00:00)"))
+                    .ToolTipText(LOCTEXT("PresetNightTip", "Zero solar irradiance. Asphalt and concrete retain thermal mass, glowing against cool vegetation and night sky."))
+                    .OnClicked(this, &SOSMControlCenter::OnSetPresetNight)
+                ]
+                + SHorizontalBox::Slot().AutoWidth()
+                [
+                    SNew(SButton)
+                    .Text(LOCTEXT("PresetDawn", "Dawn (06:00)"))
+                    .ToolTipText(LOCTEXT("PresetDawnTip", "Coldest hour before sunrise. Minimum scene temperatures."))
+                    .OnClicked(this, &SOSMControlCenter::OnSetPresetDawn)
+                ]
+            ]
+
+            // Sliders Container
+            + SVerticalBox::Slot().AutoHeight()
+            [
+                SNew(SBorder).Padding(16.0f)
+                [
+                    SNew(SVerticalBox)
+
+                    // Base Temperature
+                    + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+                    [
+                        SNew(STextBlock).Text(LOCTEXT("BaseTempLabel", "Base Environment Temp (°C)"))
+                    ]
+                    + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 16)
+                    [
+                        SNew(SHorizontalBox)
+                        + SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 16, 0)
+                        [
+                            SNew(SSlider)
+                            .MinValue(-20.0f)
+                            .MaxValue(60.0f)
+                            .Value_Lambda([]() { return FOSMThermalSimulation::GlobalParams.BaseEnvironmentTempC; })
+                            .OnValueChanged(this, &SOSMControlCenter::OnBaseTempChanged)
+                        ]
+                        + SHorizontalBox::Slot().AutoWidth()
+                        [
+                            SNew(STextBlock)
+                            .Text_Lambda([]() { return FText::FromString(FString::Printf(TEXT("%.1f °C"), FOSMThermalSimulation::GlobalParams.BaseEnvironmentTempC)); })
+                        ]
+                    ]
+
+                    // Heat Sensitivity
+                    + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+                    [
+                        SNew(STextBlock).Text(LOCTEXT("SensitivityLabel", "IR Camera Heat Sensitivity"))
+                    ]
+                    + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 16)
+                    [
+                        SNew(SHorizontalBox)
+                        + SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 16, 0)
+                        [
+                            SNew(SSlider)
+                            .MinValue(0.1f)
+                            .MaxValue(10.0f)
+                            .Value_Lambda([this]() { return CurrentHeatSensitivity; })
+                            .OnValueChanged(this, &SOSMControlCenter::OnHeatSensitivityChanged)
+                        ]
+                        + SHorizontalBox::Slot().AutoWidth()
+                        [
+                            SNew(STextBlock)
+                            .Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("%.2fx"), CurrentHeatSensitivity)); })
+                        ]
+                    ]
+
+                    // Time of Day (Sun Angle)
+                    + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+                    [
+                        SNew(STextBlock).Text(LOCTEXT("TimeOfDayLabel2", "Time of Day (Sun Angle)"))
+                    ]
+                    + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 16)
+                    [
+                        SNew(SHorizontalBox)
+                        + SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 16, 0)
+                        [
+                            SNew(SSlider)
+                            .MinValue(0.0f)
+                            .MaxValue(24.0f)
+                            .Value_Lambda([]() { return FOSMThermalSimulation::GlobalParams.CurrentTimeOfDayHours; })
+                            .OnValueChanged(this, &SOSMControlCenter::OnTimeOfDayChanged)
+                        ]
+                        + SHorizontalBox::Slot().AutoWidth()
+                        [
+                            SNew(STextBlock)
+                            .Text_Lambda([]() { return FText::FromString(FString::Printf(TEXT("%.1f Hrs"), FOSMThermalSimulation::GlobalParams.CurrentTimeOfDayHours)); })
+                        ]
+                    ]
+
+                    // Speed
+                    + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+                    [
+                        SNew(STextBlock).Text(LOCTEXT("SpeedLabel2", "Simulation Speed"))
+                    ]
+                    + SVerticalBox::Slot().AutoHeight()
+                    [
+                        SNew(SComboBox<TSharedPtr<FString>>)
+                        .OptionsSource(&TimeMultiplierOptions)
+                        .OnGenerateWidget_Lambda([](TSharedPtr<FString> InItem) { return SNew(STextBlock).Text(FText::FromString(*InItem)); })
+                        .OnSelectionChanged(this, &SOSMControlCenter::OnTimeMultiplierChanged)
+                        [
+                            SNew(STextBlock)
+                            .Text_Lambda([this]()
+                            {
+                                int32 SimSpeedIndex = 0;
+                                if (FOSMThermalSimulation::GlobalParams.TimeMultiplier == 1.0f) SimSpeedIndex = 0;
+                                else if (FOSMThermalSimulation::GlobalParams.TimeMultiplier == 10.0f) SimSpeedIndex = 1;
+                                else if (FOSMThermalSimulation::GlobalParams.TimeMultiplier == 60.0f) SimSpeedIndex = 2;
+                                else if (FOSMThermalSimulation::GlobalParams.TimeMultiplier == 3600.0f) SimSpeedIndex = 3;
+
+                                if (TimeMultiplierOptions.IsValidIndex(SimSpeedIndex))
+                                {
+                                    return FText::FromString(*TimeMultiplierOptions[SimSpeedIndex]);
+                                }
+                                return FText::FromString(TEXT("1x"));
+                            })
+                        ]
+                    ]
+                ]
+            ]
+        ];
+}
+
+TSharedRef<SWidget> SOSMControlCenter::BuildSimulationControls()
+{
+    return SNullWidget::NullWidget; // Replaced by BuildEnvironmentTab
+}
+
+void SOSMControlCenter::OnBaseTempChanged(float NewValue)
+{
+    CurrentBaseTempC = NewValue;
+    FOSMThermalSimulation::GlobalParams.BaseEnvironmentTempC = NewValue;
+    FOSMThermalSimulation::UpdateEnvironmentFromTime(FOSMThermalSimulation::GlobalParams);
+
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (World)
+    {
+        UOSMThermalMPC::UpdateFromWorld(World);
+        for (TActorIterator<AOSMInfraredCamera> It(World); It; ++It)
+        {
+            (*It)->SetAmbientTemperatureK(FOSMThermalSimulation::GlobalParams.AmbientTemperatureK);
+        }
+        if (GEditor) GEditor->RedrawAllViewports();
+    }
+}
+
+void SOSMControlCenter::OnHeatSensitivityChanged(float NewValue)
+{
+    CurrentHeatSensitivity = NewValue;
+    
+    // Update active IR Cameras
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (World)
+    {
+        for (TActorIterator<AOSMInfraredCamera> It(World); It; ++It)
+        {
+            (*It)->SetHeatSensitivity(NewValue);
+        }
+        if (GEditor) GEditor->RedrawAllViewports();
+    }
+}
+
+FReply SOSMControlCenter::OnToggleSimulationPlay()
+{
+    FOSMThermalSimulation::GlobalParams.bIsSimulationRunning = !FOSMThermalSimulation::GlobalParams.bIsSimulationRunning;
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnResetSimulation()
+{
+    FOSMThermalSimulation::GlobalParams.bIsSimulationRunning = false;
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (World)
+    {
+        FOSMThermalSimulation::ComputeInitialStates(World, FOSMThermalSimulation::GlobalParams);
+        UOSMThermalMPC::UpdateFromWorld(World);
+        if (GEditor) GEditor->RedrawAllViewports();
+    }
+    return FReply::Handled();
+}
+
+void SOSMControlCenter::OnTimeOfDayChanged(float NewValue)
+{
+    CurrentTimeOfDayHours = NewValue;
+    FOSMThermalSimulation::GlobalParams.CurrentTimeOfDayHours = NewValue;
+    FOSMThermalSimulation::UpdateEnvironmentFromTime(FOSMThermalSimulation::GlobalParams);
+
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (World)
+    {
+        UOSMThermalMPC::UpdateFromWorld(World);
+        for (TActorIterator<AOSMInfraredCamera> It(World); It; ++It)
+        {
+            (*It)->SetAmbientTemperatureK(FOSMThermalSimulation::GlobalParams.AmbientTemperatureK);
+            // Immediately update the sun rotation for this camera
+            (*It)->UpdateSunRotation(World, NewValue);
+        }
+        if (GEditor) GEditor->RedrawAllViewports();
+    }
+}
+
+FReply SOSMControlCenter::OnSetPresetNoon()
+{
+    OnTimeOfDayChanged(12.0f);
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnSetPresetSunset()
+{
+    OnTimeOfDayChanged(18.0f);
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnSetPresetNight()
+{
+    OnTimeOfDayChanged(0.0f);
+    return FReply::Handled();
+}
+
+FReply SOSMControlCenter::OnSetPresetDawn()
+{
+    OnTimeOfDayChanged(6.0f);
+    return FReply::Handled();
+}
+
+void SOSMControlCenter::OnTimeMultiplierChanged(TSharedPtr<FString> Selection, ESelectInfo::Type SelectInfo)
+{
+    CurrentTimeMultiplierIndex = TimeMultiplierOptions.Find(Selection);
+    
+    if (CurrentTimeMultiplierIndex == 0) FOSMThermalSimulation::GlobalParams.TimeMultiplier = 1.0f;
+    else if (CurrentTimeMultiplierIndex == 1) FOSMThermalSimulation::GlobalParams.TimeMultiplier = 10.0f;
+    else if (CurrentTimeMultiplierIndex == 2) FOSMThermalSimulation::GlobalParams.TimeMultiplier = 60.0f;
+    else if (CurrentTimeMultiplierIndex == 3) FOSMThermalSimulation::GlobalParams.TimeMultiplier = 3600.0f;
 }
 
 // ---------------------------------------------------------------------------

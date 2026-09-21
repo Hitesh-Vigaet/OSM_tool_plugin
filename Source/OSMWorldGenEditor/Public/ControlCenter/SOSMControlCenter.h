@@ -185,6 +185,14 @@ private:
     FReply OnBuildCity();
     /** Remove everything the builder created, leaving the rest of the level alone. */
     FReply OnClearCity();
+    /** Spawn or select the OSM Infrared Thermal Camera overlooking the city. */
+    FReply OnSpawnIRCamera();
+    /** Unlock viewport from IR Camera and return to standard perspective. */
+    FReply OnEjectIRCamera();
+    /** Switch thermal camera palette in editor */
+    FReply OnSetPaletteIronbow();
+    FReply OnSetPaletteWhiteHot();
+    FReply OnSetPaletteBlackHot();
 
     /** Last dry-run output, shown in the issues panel area. */
     FString DryRunText;
@@ -194,4 +202,32 @@ private:
 
     /** Node types present in the graph, in declaration order, for stable panel ordering. */
     TArray<EOSMNodeType> GetPresentNodeTypes() const;
+
+    // ---- Simulation Controls ----
+    void OnTimeOfDayChanged(float NewValue);
+    void OnTimeMultiplierChanged(TSharedPtr<FString> Selection, ESelectInfo::Type SelectInfo);
+    
+    void OnBaseTempChanged(float NewValue);
+    void OnHeatSensitivityChanged(float NewValue);
+    FReply OnToggleSimulationPlay();
+    FReply OnResetSimulation();
+
+    FReply OnSetPresetNoon();
+    FReply OnSetPresetSunset();
+    FReply OnSetPresetNight();
+    FReply OnSetPresetDawn();
+
+    TSharedRef<SWidget> BuildCityExplorerTab();
+    TSharedRef<SWidget> BuildEnvironmentTab();
+    TSharedRef<SWidget> BuildSimulationControls();
+    
+    // Global simulation state controlled by UI
+    float CurrentTimeOfDayHours = 12.0f;
+    float CurrentBaseTempC = 20.0f;
+    float CurrentHeatSensitivity = 1.0f;
+    int32 CurrentTimeMultiplierIndex = 0;
+    TArray<TSharedPtr<FString>> TimeMultiplierOptions;
+
+    // Tabs
+    int32 ActiveTabIndex = 0;
 };

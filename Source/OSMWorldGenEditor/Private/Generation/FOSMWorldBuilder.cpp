@@ -18,6 +18,17 @@
 #include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "ProceduralMeshComponent.h"
+#include "Materials/EOSMSurfaceCategory.h"
+#include "Materials/UOSMPhysicalMaterial.h"
+#include "Materials/FOSMMaterialResolver.h"
+#include "Materials/UOSMMaterialPalette.h"
+#include "Materials/FOSMMaterialPaletteFactory.h"
+#include "Sensors/UOSMThermalStateComponent.h"
+#include "Materials/FOSMMaterialIdentityGroup.h"
+#include "Materials/FOSMMaterialValidator.h"
+#include "Sensors/UOSMThermalStateComponent.h"
+#include "Sensors/FOSMThermalSimulation.h"
+#include "Sensors/AOSMInfraredCamera.h"
 
 const FName FOSMWorldBuilder::GetGeneratedActorTag()
 {
@@ -101,17 +112,44 @@ namespace
         return Base;
     }
 
-    UMaterialInstanceDynamic* MakeColouredMaterial(UObject* Outer, const FLinearColor& Colour)
+    /**
+     * Applies per-section materials from the palette, with PhysMaterial wired for sensor traces.
+     * Replaces the old ConfigureForIR() stencil-based approach.
+     *
+     * For grey-box mode: creates tinted MIDs with PhysMaterial attached.
+     * For textured mode: loads visual variants from the MIG palette.
+     */
+    void ApplyMaterialsFromPalette(
+        UProceduralMeshComponent* MeshComp,
+        int32 MeshSection,
+        EOSMSurfaceCategory Category,
+        UOSMMaterialPalette* Palette,
+        int32 Seed)
     {
-        UMaterialInterface* Base = GetBaseMaterial();
-        if (!Base) return nullptr;
+        if (!MeshComp || !Palette) return;
 
-        UMaterialInstanceDynamic* Instance = UMaterialInstanceDynamic::Create(Base, Outer);
-        if (Instance)
+        const FOSMMaterialIdentityGroup* Group = Palette->FindGroup(Category);
+        if (!Group) return;
+
+        UOSMPhysicalMaterial* PhysMat = Group->PhysicalMaterial;
+
+        // Try authored visual material first
+        UMaterialInterface* VisualMat = Group->SelectVisualVariant(Seed);
+
+        if (!VisualMat)
         {
-            Instance->SetVectorParameterValue(TEXT("Color"), Colour);
+            // Grey-box fallback: tinted material with PhysMaterial wired
+            VisualMat = FOSMMaterialPaletteFactory::CreateGreyBoxMaterial(
+                MeshComp, Category, PhysMat);
         }
-        return Instance;
+
+        if (VisualMat)
+        {
+            MeshComp->SetMaterial(MeshSection, VisualMat);
+        }
+
+        // Enable collision for sensor traces (QueryOnly — no physics sim overhead)
+        MeshComp->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     }
 
     /**
@@ -179,11 +217,7 @@ namespace
         // vertices offset from its own centroid. The result looked like one nested blob and a
         // single enormous ground plane, rather than a city.
         Actor->SetActorLocation(Location);
-
-        if (Root)
-        {
-            Actor->AttachToActor(Root, FAttachmentTransformRules::KeepWorldTransform);
-        }
+        Actor->SetFolderPath(FName(TEXT("OSM_City")));
 
         return Actor;
     }
@@ -242,6 +276,12 @@ FOSMWorldBuilder::FResult FOSMWorldBuilder::Build(
                      Options.bGreyBox ? TEXT("greybox") : TEXT("materials"));
 
     const FOSMLocalProjection Projector(Region.GetCenterLat(), Region.GetCenterLon());
+
+    UOSMMaterialPalette* Palette = Options.MaterialPalette;
+    if (!Palette)
+    {
+        Palette = FOSMMaterialPaletteFactory::CreateDefaultPalette(GetTransientPackage());
+    }
 
     // ---- The ground ----
     //
@@ -312,9 +352,36 @@ FOSMWorldBuilder::FResult FOSMWorldBuilder::Build(
         if (SpawnMeshActor(World, Root, TEXT("Terrain"), FVector::ZeroVector, MeshComp))
         {
             MeshComp->CreateMeshSection_LinearColor(0, Vertices, Triangles, Normals, UVs,
-                UniformColours(Vertices.Num(), ColourTerrain), TArray<FProcMeshTangent>(),
-                /*bCreateCollision*/ false);
-            MeshComp->SetMaterial(0, MakeColouredMaterial(MeshComp, ColourTerrain));
+                UniformColours(Vertices.Num(), FOSMMaterialPaletteFactory::GetCategoryDebugColour(EOSMSurfaceCategory::Soil)),
+                TArray<FProcMeshTangent>(), /*bCreateCollision*/ true);
+            ApplyMaterialsFromPalette(MeshComp, 0, EOSMSurfaceCategory::Soil, Palette, 0);
+
+            MeshComp->SetRenderCustomDepth(true);
+            MeshComp->SetCustomDepthStencilValue(static_cast<int32>(EOSMSurfaceCategory::Soil));
+
+            if (AActor* TerrainActor = MeshComp->GetOwner())
+            {
+                UOSMThermalStateComponent* ThermalState = NewObject<UOSMThermalStateComponent>(TerrainActor);
+                TerrainActor->AddInstanceComponent(ThermalState);
+                ThermalState->RegisterComponent();
+
+                // Sum total area from all triangles for accurate thermal mass
+                float TotalAreaSqm = 0.0f;
+                for (int32 i = 0; i < Triangles.Num(); i += 3)
+                {
+                    FVector A = Vertices[Triangles[i]];
+                    FVector B = Vertices[Triangles[i + 1]];
+                    FVector C = Vertices[Triangles[i + 2]];
+                    TotalAreaSqm += FVector::CrossProduct(B - A, C - A).Size() * 0.5f * 0.0001f; // cm^2 to m^2
+                }
+
+                ThermalState->InitializeZones(
+                    { EOSMSurfaceCategory::Soil },
+                    { Palette->GetPhysicalMaterial(EOSMSurfaceCategory::Soil) },
+                    { TotalAreaSqm },
+                    { FVector(0, 0, 1) } // Average normal up
+                );
+            }
 
             Dump.Add(TEXT("terrain"), TEXT("Terrain"), FVector::ZeroVector, Vertices, Triangles);
 
@@ -409,37 +476,71 @@ FOSMWorldBuilder::FResult FOSMWorldBuilder::Build(
 
             const FVector Location(CentroidM.X * MetersToCm, CentroidM.Y * MetersToCm, BaseCm);
 
-            UProceduralMeshComponent* MeshComp = nullptr;
-            if (!SpawnMeshActor(World, Root, FString::Printf(TEXT("Building_%d"), NodeId), Location, MeshComp))
-            {
-                ++Result.Skipped;
-                continue;
-            }
-
-            // Walls and roof as separate sections so the roof reads as a distinct plane — which
-            // is what makes height differences legible in a flat-grey pass.
+            // Walls and roof as separate mesh actors/components so that CustomDepthStencilValue
+            // can be set individually per section (UE5 stencil is per-component, not per-section).
+            // This allows walls to be rendered with WallCategory (purple/magenta) and roofs with
+            // RoofCategory (golden amber/yellow) in the FLIR thermal shader.
             TArray<int32> WallTris = Mesh.GetTrianglesForSection(EOSMMeshSection::Wall);
             WallTris.Append(Mesh.GetTrianglesForSection(EOSMMeshSection::GroundFloor));
 
             const TArray<int32> RoofTris = Mesh.GetTrianglesForSection(EOSMMeshSection::Roof);
 
-            // Walls and roof share one vertex array, so the colour is chosen per vertex by which
-            // section uses it. Roof last, because a vertex shared with the wall top belongs
-            // visually to the cap.
-            TArray<FLinearColor> Colours = UniformColours(Mesh.Vertices.Num(), ColourBuilding);
-            for (const int32 Index : RoofTris)
+            const FOSMMaterialAssignment MatAssign = FOSMMaterialResolver::Resolve(
+                Node.Type, Node.SubType, Node.Tags);
+
+            // --- Wall component (Root component of building actor) ---
+            UProceduralMeshComponent* WallComp = nullptr;
+            AActor* BuildingActor = SpawnMeshActor(World, Root, FString::Printf(TEXT("Building_%d"), NodeId), Location, WallComp);
+            if (!BuildingActor || !WallComp)
             {
-                if (Colours.IsValidIndex(Index)) Colours[Index] = ColourRoof;
+                ++Result.Skipped;
+                continue;
             }
 
-            MeshComp->CreateMeshSection_LinearColor(0, Mesh.Vertices, WallTris, Mesh.Normals,
-                Mesh.UVs, Colours, TArray<FProcMeshTangent>(), /*bCreateCollision*/ false);
+            TArray<FLinearColor> WallColours = UniformColours(Mesh.Vertices.Num(),
+                FOSMMaterialPaletteFactory::GetCategoryDebugColour(MatAssign.WallCategory));
 
-            MeshComp->CreateMeshSection_LinearColor(1, Mesh.Vertices, RoofTris, Mesh.Normals,
-                Mesh.UVs, Colours, TArray<FProcMeshTangent>(), /*bCreateCollision*/ false);
+            WallComp->CreateMeshSection_LinearColor(0, Mesh.Vertices, WallTris, Mesh.Normals,
+                Mesh.UVs, WallColours, TArray<FProcMeshTangent>(), /*bCreateCollision*/ true);
+            ApplyMaterialsFromPalette(WallComp, 0, MatAssign.WallCategory, Palette, NodeId);
 
-            MeshComp->SetMaterial(0, MakeColouredMaterial(MeshComp, ColourBuilding));
-            MeshComp->SetMaterial(1, MakeColouredMaterial(MeshComp, ColourRoof));
+            WallComp->SetRenderCustomDepth(true);
+            WallComp->SetCustomDepthStencilValue(static_cast<int32>(MatAssign.WallCategory));
+
+            // --- Roof component (Child component on the SAME building actor) ---
+            // Using a single actor with two components allows per-component CustomDepthStencil
+            // without doubling the world actor count or overwhelming TedsCore hierarchy tracking.
+            if (RoofTris.Num() > 0)
+            {
+                UProceduralMeshComponent* RoofComp = NewObject<UProceduralMeshComponent>(BuildingActor);
+                BuildingActor->AddInstanceComponent(RoofComp);
+                RoofComp->SetupAttachment(WallComp);
+                RoofComp->RegisterComponent();
+                RoofComp->SetMobility(EComponentMobility::Movable);
+
+                TArray<FLinearColor> RoofColours = UniformColours(Mesh.Vertices.Num(),
+                    FOSMMaterialPaletteFactory::GetCategoryDebugColour(MatAssign.RoofCategory));
+
+                RoofComp->CreateMeshSection_LinearColor(0, Mesh.Vertices, RoofTris, Mesh.Normals,
+                    Mesh.UVs, RoofColours, TArray<FProcMeshTangent>(), /*bCreateCollision*/ true);
+                ApplyMaterialsFromPalette(RoofComp, 0, MatAssign.RoofCategory, Palette, NodeId + 1000000);
+
+                RoofComp->SetRenderCustomDepth(true);
+                RoofComp->SetCustomDepthStencilValue(static_cast<int32>(MatAssign.RoofCategory));
+            }
+
+            // Attach thermal state component for simulation on primary building actor
+            UOSMThermalStateComponent* ThermalState = NewObject<UOSMThermalStateComponent>(BuildingActor);
+            BuildingActor->AddInstanceComponent(ThermalState);
+            ThermalState->RegisterComponent();
+
+            ThermalState->InitializeZones(
+                { MatAssign.WallCategory, MatAssign.RoofCategory },
+                { Palette->GetPhysicalMaterial(MatAssign.WallCategory),
+                  Palette->GetPhysicalMaterial(MatAssign.RoofCategory) },
+                { 0.0f, 0.0f },
+                { FVector(1, 0, 0), FVector(0, 0, 1) }
+            );
 
             // The complete mesh, walls and roof together — the closure check needs every triangle
             // of the solid, not one section of it.
@@ -601,9 +702,41 @@ FOSMWorldBuilder::FResult FOSMWorldBuilder::Build(
                 continue;
             }
 
+            const FOSMGraphNode& RoadNode = Graph.Nodes[NodeId];
+            const FOSMMaterialAssignment RoadMatAssign = FOSMMaterialResolver::Resolve(
+                RoadNode.Type, RoadNode.SubType, RoadNode.Tags);
+            const EOSMSurfaceCategory RoadCategory = RoadMatAssign.GetDominantCategory(RoadNode.Type);
+
             MeshComp->CreateMeshSection_LinearColor(0, Vertices, Triangles, Normals, UVs,
-                UniformColours(Vertices.Num(), Kind.Colour), TArray<FProcMeshTangent>(), false);
-            MeshComp->SetMaterial(0, MakeColouredMaterial(MeshComp, Kind.Colour));
+                UniformColours(Vertices.Num(), FOSMMaterialPaletteFactory::GetCategoryDebugColour(RoadCategory)),
+                TArray<FProcMeshTangent>(), /*bCreateCollision*/ true);
+            ApplyMaterialsFromPalette(MeshComp, 0, RoadCategory, Palette, NodeId);
+
+            MeshComp->SetRenderCustomDepth(true);
+            MeshComp->SetCustomDepthStencilValue(static_cast<int32>(RoadCategory));
+
+            if (AActor* RoadActor = MeshComp->GetOwner())
+            {
+                UOSMThermalStateComponent* ThermalState = NewObject<UOSMThermalStateComponent>(RoadActor);
+                RoadActor->AddInstanceComponent(ThermalState);
+                ThermalState->RegisterComponent();
+
+                float TotalAreaSqm = 0.0f;
+                for (int32 i = 0; i < Triangles.Num(); i += 3)
+                {
+                    FVector A = Vertices[Triangles[i]];
+                    FVector B = Vertices[Triangles[i + 1]];
+                    FVector C = Vertices[Triangles[i + 2]];
+                    TotalAreaSqm += FVector::CrossProduct(B - A, C - A).Size() * 0.5f * 0.0001f;
+                }
+
+                ThermalState->InitializeZones(
+                    { RoadCategory },
+                    { Palette->GetPhysicalMaterial(RoadCategory) },
+                    { TotalAreaSqm },
+                    { FVector(0, 0, 1) }
+                );
+            }
 
             Dump.Add(Kind.DumpKind, Label, Location, Vertices, Triangles);
 
@@ -806,9 +939,40 @@ FOSMWorldBuilder::FResult FOSMWorldBuilder::Build(
                     continue;
                 }
 
+                const FOSMMaterialAssignment AreaMatAssign = FOSMMaterialResolver::Resolve(
+                    Node.Type, Node.SubType, Node.Tags);
+                const EOSMSurfaceCategory AreaCategory = AreaMatAssign.GetDominantCategory(Node.Type);
+
                 MeshComp->CreateMeshSection_LinearColor(0, Vertices, Triangles, Normals, UVs,
-                    UniformColours(Vertices.Num(), Colour), TArray<FProcMeshTangent>(), false);
-                MeshComp->SetMaterial(0, MakeColouredMaterial(MeshComp, Colour));
+                    UniformColours(Vertices.Num(), bCivic ? ColourCivic : FOSMMaterialPaletteFactory::GetCategoryDebugColour(AreaCategory)),
+                    TArray<FProcMeshTangent>(), /*bCreateCollision*/ true);
+                ApplyMaterialsFromPalette(MeshComp, 0, AreaCategory, Palette, NodeId);
+
+                MeshComp->SetRenderCustomDepth(true);
+                MeshComp->SetCustomDepthStencilValue(static_cast<int32>(AreaCategory));
+
+                if (AActor* AreaActor = MeshComp->GetOwner())
+                {
+                    UOSMThermalStateComponent* ThermalState = NewObject<UOSMThermalStateComponent>(AreaActor);
+                    AreaActor->AddInstanceComponent(ThermalState);
+                    ThermalState->RegisterComponent();
+
+                    float TotalAreaSqm = 0.0f;
+                    for (int32 i = 0; i < Triangles.Num(); i += 3)
+                    {
+                        FVector A = Vertices[Triangles[i]];
+                        FVector B = Vertices[Triangles[i + 1]];
+                        FVector C = Vertices[Triangles[i + 2]];
+                        TotalAreaSqm += FVector::CrossProduct(B - A, C - A).Size() * 0.5f * 0.0001f;
+                    }
+
+                    ThermalState->InitializeZones(
+                        { AreaCategory },
+                        { Palette->GetPhysicalMaterial(AreaCategory) },
+                        { TotalAreaSqm },
+                        { FVector(0, 0, 1) }
+                    );
+                }
 
                 Dump.Add(*FString(Prefix).ToLower(), Label, Location, Vertices, Triangles);
 
@@ -822,6 +986,52 @@ FOSMWorldBuilder::FResult FOSMWorldBuilder::Build(
                 TEXT("%d of %d areas could not be triangulated against the terrain; their surfaces "
                      "span the ground rather than following it."),
                 FellBackToSpanning, Result.Areas));
+        }
+    }
+
+    // ---- IR Thermal Camera ----
+    if (Options.bSpawnIRCamera && World)
+    {
+        const FVector2D CenterM = GroundBounds.GetCenter();
+        const double ExtentM = FMath::Max(GroundBounds.GetExtent().X, GroundBounds.GetExtent().Y);
+        const double CameraAltitudeCm = FMath::Max(ExtentM * 0.8, 150.0) * MetersToCm;
+        const FVector CameraLocation(CenterM.X * MetersToCm, (CenterM.Y - ExtentM * 0.7) * MetersToCm, CameraAltitudeCm);
+        const FRotator CameraRotation(-35.0f, 90.0f, 0.0f);
+
+        FActorSpawnParameters CamParams;
+        CamParams.ObjectFlags = RF_Transactional;
+        CamParams.Owner = Root;
+
+        AOSMInfraredCamera* IRCamera = World->SpawnActor<AOSMInfraredCamera>(
+            AOSMInfraredCamera::StaticClass(), CameraLocation, CameraRotation, CamParams);
+
+        if (IRCamera)
+        {
+            IRCamera->SetActorLabel(TEXT("OSM_InfraredCamera"));
+            IRCamera->Tags.AddUnique(GetGeneratedActorTag());
+            IRCamera->SetFolderPath(FName(TEXT("OSM_City")));
+        }
+    }
+
+    // Pre-compute steady-state thermal map for all generated actors
+    FOSMThermalSimulation::FSimulationParams ThermalParams;
+    FOSMThermalSimulation::ComputeInitialStates(World, ThermalParams);
+
+    // Post-generation material coherence validation
+    FOSMMaterialValidator::FValidationResult ValidationResult =
+        FOSMMaterialValidator::ValidateWorld(World);
+
+    if (!ValidationResult.IsValid())
+    {
+        Result.Problems.Add(FString::Printf(
+            TEXT("Material validation: %d missing PhysMat, %d missing VisualMat."),
+            ValidationResult.MissingPhysMat, ValidationResult.MissingVisualMat));
+        for (const FString& Error : ValidationResult.Errors)
+        {
+            if (Result.Problems.Num() < 20)
+            {
+                Result.Problems.Add(Error);
+            }
         }
     }
 
