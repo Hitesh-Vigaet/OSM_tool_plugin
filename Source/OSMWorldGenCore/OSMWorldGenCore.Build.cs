@@ -21,12 +21,15 @@ public class OSMWorldGenCore : ModuleRules
             "CoreUObject",
             "Engine",
             "GeometryCore",   // PolygonTriangulation, for building roofs from footprints
+            "PhysicsCore",    // UPhysicalMaterial and EPhysicalSurface
+            "InputCore",      // EKeys for player input bindings
         });
 
         PrivateDependencyModuleNames.AddRange(new string[]
         {
             "Projects", // for IPluginManager
             "XmlParser", // for FXmlFile in FOSMXMLParser
+            "ProceduralMeshComponent", // for mesh validation and sensor queries
         });
 
         // ------------------------------------------------------------------

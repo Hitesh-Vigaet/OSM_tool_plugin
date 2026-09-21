@@ -5,6 +5,7 @@
 #include "ToolMenus.h"
 #include "Wizard/SOSMImportWizard.h"
 #include "ControlCenter/SOSMControlCenter.h"
+#include "Materials/FOSMThermalMaterialBuilderV2.h"
 
 #define LOCTEXT_NAMESPACE "FOSMWorldGenEditorModule"
 
@@ -48,6 +49,17 @@ void FOSMWorldGenEditorModule::RegisterMenuExtensions()
             FUIAction(FExecuteAction::CreateLambda([]()
             {
                 FGlobalTabmanager::Get()->TryInvokeTab(SOSMControlCenter::TabId);
+            }))
+        );
+
+        Section.AddMenuEntry(
+            "RebuildThermalMaterial",
+            LOCTEXT("RebuildThermalMaterialLabel", "Rebuild Thermal Post-Process Material"),
+            LOCTEXT("RebuildThermalMaterialTooltip", "Reconstruct and compile M_IRPostProcessV2 with the latest shader code."),
+            FSlateIcon(),
+            FUIAction(FExecuteAction::CreateLambda([]()
+            {
+                FOSMThermalMaterialBuilderV2::GetOrCreateThermalPostProcessMaterial(/*bForceRebuild=*/true);
             }))
         );
     }

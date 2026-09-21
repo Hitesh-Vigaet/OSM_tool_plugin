@@ -3,7 +3,7 @@
 #include "Fetch/FOSMRegionCache.h"
 #include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
-#include "HAL/PlatformFilemanager.h"
+#include "HAL/PlatformFileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"

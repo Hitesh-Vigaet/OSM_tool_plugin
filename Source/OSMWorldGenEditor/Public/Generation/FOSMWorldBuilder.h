@@ -68,6 +68,15 @@ public:
         bool bGreyBox = true;
 
         /**
+         * Material palette for physical, thermal, and sensor simulation.
+         * When null, uses default programmatic palette with standard properties for all 16 surface categories.
+         */
+        class UOSMMaterialPalette* MaterialPalette = nullptr;
+
+        /** Automatically spawn a pre-positioned AOSMInfraredCamera actor with thermal viewport vision. */
+        bool bSpawnIRCamera = false;
+
+        /**
          * When set, every emitted mesh is written here for offline inspection.
          *
          * Empty by default, so a normal build pays nothing. See FOSMGeometryDump for why looking
